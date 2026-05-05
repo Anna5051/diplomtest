@@ -531,9 +531,24 @@ body {
 }
 
 .bot-author {
-  margin: 5px 0 9px;
+  margin: 5px 0 6px;
   color: #cfc8ee;
   font-size: 13px;
+}
+
+.bot-story {
+  margin: 0 0 8px;
+  color: #efe9ff;
+  font-size: 12px;
+  line-height: 1.42;
+  font-style: italic;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .author-link {
@@ -545,20 +560,6 @@ body {
 .author-link:hover {
   color: #efe9ff;
   border-bottom-color: rgba(239, 233, 255, 0.7);
-}
-
-.bot-desc {
-  margin: 0;
-  color: #ded9ff;
-  font-size: 13px;
-  line-height: 1.45;
-
-  min-height: 54px;
-
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .bot-tags {

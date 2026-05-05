@@ -482,23 +482,25 @@ body {
   font-size: 12px;
 }
 
-.heart {
-  color: #ff9fd0;
-  font-size: 20px;
-  flex-shrink: 0;
-}
-
-.character-desc {
-  margin: 0 0 12px;
-  color: #e7e3ff;
-  line-height: 1.45;
-  font-size: 13px;
-
+.character-story {
+  margin: 5px 0 8px;
+  color: #f0eaff;
+  font-size: 12px;
+  line-height: 1.42;
+  font-style: italic;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
   display: -webkit-box;
   -webkit-line-clamp: 4;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  min-height: 75px;
+}
+
+.heart {
+  color: #ff9fd0;
+  font-size: 20px;
+  flex-shrink: 0;
 }
 
 .character-tags {

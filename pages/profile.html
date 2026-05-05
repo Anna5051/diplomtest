@@ -310,6 +310,12 @@
         return localStorage.getItem(`profileAvatar_${profileId}`) || "";
       }
 
+      function setProfileAvatarImage(src) {
+        const finalSrc = src && String(src).trim() ? src : "/img/icon.svg";
+        profileAvatar.src = finalSrc;
+        profileAvatar.style.backgroundImage = "none";
+      }
+
       const savedAvatar = localStorage.getItem(avatarStorageKey);
       const userAvatar = savedUser.avatar_url || "";
 
@@ -377,7 +383,7 @@
         try {
           const result = await compressImage(file, 320, 0.82);
 
-          profileAvatar.src = result;
+          setProfileAvatarImage(result);
           topbarAvatar.src = result;
 
           try {
@@ -572,9 +578,11 @@
         profilePreview.innerHTML = ownBioHtml || "Описание пока не заполнено";
 
         if (savedAvatar && savedAvatar.trim()) {
-          profileAvatar.src = savedAvatar;
+          setProfileAvatarImage(savedAvatar);
         } else if (userAvatar && userAvatar.trim()) {
-          profileAvatar.src = userAvatar;
+          setProfileAvatarImage(userAvatar);
+        } else {
+          setProfileAvatarImage("/img/icon.svg");
         }
 
         if (!isExternalProfile) {
@@ -631,9 +639,9 @@
           profileEditor.innerHTML = profilePreview.innerHTML;
 
           if (viewedProfile.avatar_url) {
-            profileAvatar.src = viewedProfile.avatar_url;
+            setProfileAvatarImage(viewedProfile.avatar_url);
           } else {
-            profileAvatar.src = "/img/icon.svg";
+            setProfileAvatarImage("/img/icon.svg");
           }
 
           updateFollowersCount(viewedProfile);

@@ -146,6 +146,64 @@
     return div.innerHTML;
   }
 
+  function toStoryPreview(text) {
+    const raw = String(text || "");
+    if (!raw.trim()) return "";
+
+    const div = document.createElement("div");
+    div.innerHTML = raw;
+
+    return (div.textContent || div.innerText || "")
+      .replace(/\u00a0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function extractScenarioFromPrompt(systemPrompt) {
+    const prompt = String(systemPrompt || "");
+    if (!prompt) return "";
+
+    const marker = "### SCENARIO:";
+    const start = prompt.indexOf(marker);
+    if (start === -1) return "";
+
+    const after = prompt.slice(start + marker.length);
+    const nextMarkerIndex = after.indexOf("###");
+    const scenarioBlock = nextMarkerIndex === -1 ? after : after.slice(0, nextMarkerIndex);
+    return toStoryPreview(scenarioBlock);
+  }
+
+  function isTemplateLikeStory(text) {
+    const normalized = String(text || "").toLowerCase();
+    return (
+      normalized.startsWith("имя ") ||
+      normalized.includes("роль персонажа") ||
+      normalized.includes("стиль общения") ||
+      normalized.includes("правила ролевой игры")
+    );
+  }
+
+  function getStoryText(bot) {
+    const scenarioFromPrompt = extractScenarioFromPrompt(bot.system_prompt);
+    if (scenarioFromPrompt) return scenarioFromPrompt;
+
+    const shortStory = toStoryPreview(bot.description || bot.short_description || "");
+    if (shortStory) return shortStory;
+
+    const candidate = toStoryPreview(
+      bot.story_description ||
+      bot.full_description ||
+      bot.plot ||
+      ""
+    );
+
+    if (isTemplateLikeStory(candidate)) {
+      return shortStory;
+    }
+
+    return candidate;
+  }
+
   function renderChats(items) {
     chatList.innerHTML = "";
 
@@ -197,6 +255,7 @@ function renderBots(items) {
   items.forEach((bot) => {
     const card = document.createElement("article");
     card.className = "bot-card";
+    const storyDescription = getStoryText(bot);
 
     const favoriteBot = isFavoriteBot(bot.id);
     const authorIdPart = bot.creator_id ? `authorId=${encodeURIComponent(bot.creator_id)}&` : "";
@@ -233,10 +292,9 @@ function renderBots(items) {
                 @${escapeHtml(bot.author || "unknown")}
               </a>
             </p>
+            <p class="bot-story">${escapeHtml(storyDescription || "Сюжет пока не добавлен")}</p>
           </div>
         </div>
-
-        <p class="bot-desc">${escapeHtml(bot.description || "Описание отсутствует")}</p>
 
         <div class="bot-tags">
           ${
@@ -323,6 +381,8 @@ function renderBots(items) {
         creator_id: savedUser.id,
         tags: bot.tags || "",
         description: bot.short_description || "",
+        story_description: bot.full_description || bot.story_description || bot.plot || "",
+        system_prompt: bot.system_prompt || "",
         avatar: bot.avatar_url || "/img/icon.svg",
       }));
     } catch {
@@ -342,6 +402,8 @@ function renderBots(items) {
         creator_id: bot.creator_id || bot.author_id || null,
         tags: bot.tags || "",
         description: bot.short_description || "",
+        story_description: bot.full_description || bot.story_description || bot.plot || "",
+        system_prompt: bot.system_prompt || "",
         avatar: bot.avatar_url || "/img/icon.svg",
       }));
     } catch {
