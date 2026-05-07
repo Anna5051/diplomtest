@@ -181,6 +181,21 @@ body {
   font-size: 18px;
 }
 
+.chat-restricted-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 170, 170, 0.48);
+  background: rgba(120, 38, 38, 0.42);
+  color: #ffdede;
+  font-size: 11px;
+  font-weight: 800;
+  vertical-align: middle;
+}
+
 .chat-info p {
   margin: 0;
   color: #e7ddff;

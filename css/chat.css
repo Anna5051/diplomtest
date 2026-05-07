@@ -35,7 +35,7 @@ body {
   height: 56px;
 
   display: grid;
-  grid-template-columns: 160px 1fr 240px;
+  grid-template-columns: 160px 1fr max-content !important;
 
   align-items: center;
 
@@ -75,8 +75,10 @@ body.chat-overlay-open .chat-input-wrap {
 
 .chat-topbar-right {
   display: flex;
-  justify-content: flex-end;
+  justify-content: flex-end !important;
   gap: 8px;
+  flex-wrap: nowrap;
+  width: max-content;
 }
 
 .proxy-settings-btn {
@@ -85,9 +87,11 @@ body.chat-overlay-open .chat-input-wrap {
   color: #fff;
   border-radius: 10px;
   padding: 6px 12px;
+  min-height: 34px;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .persona-pill {
@@ -96,9 +100,11 @@ body.chat-overlay-open .chat-input-wrap {
   color: #fff;
   border-radius: 10px;
   padding: 6px 12px;
+  min-height: 34px;
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .menu-btn {

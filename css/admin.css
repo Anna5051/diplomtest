@@ -244,6 +244,16 @@ body {
   text-overflow: ellipsis;
 }
 
+.admin-inline-link {
+  color: #d9c8ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.admin-inline-link:hover {
+  color: #f5eeff;
+}
+
 .user-status-badge {
   display: inline-flex;
   align-items: center;

@@ -45,6 +45,7 @@
             Пользователи
           </button>
           <button class="sidebar-btn" data-tab="botsTab">Боты</button>
+          <button class="sidebar-btn" data-tab="reportsTab">Жалобы</button>
 
         </aside>
 
@@ -64,6 +65,14 @@
 
             <div id="botsGrid" class="bots-grid"></div>
             <p id="botsEmpty" class="empty-state">Нет ботов</p>
+          </div>
+
+          <div id="reportsTab" class="admin-tab">
+            <div class="section-head">
+              <h2>Жалобы</h2>
+            </div>
+            <div id="reportsList" class="admin-list"></div>
+            <p id="reportsEmpty" class="empty-state">Жалоб нет</p>
           </div>
 
         </section>
@@ -101,9 +110,12 @@
 
       const botsGrid = document.getElementById("botsGrid");
       const botsEmpty = document.getElementById("botsEmpty");
+      const reportsList = document.getElementById("reportsList");
+      const reportsEmpty = document.getElementById("reportsEmpty");
 
       let allUsers = [];
       let allBots = [];
+      let allReports = [];
 
       function authHeaders() {
         return {
@@ -480,6 +492,118 @@
         });
       }
 
+      function formatReportDate(value) {
+        const date = new Date(value || "");
+        if (Number.isNaN(date.getTime())) return "—";
+        return date.toLocaleString("ru-RU");
+      }
+
+      async function resolveReport(report, action) {
+        const labels = {
+          block: "Блокировать",
+          delete: "Удалить",
+          dismiss: "Отклонить",
+        };
+        const proceed = await siteConfirm(
+          `${labels[action]} жалобу #${report.id}?`,
+          {
+            title: "Подтверждение",
+            confirmText: labels[action],
+            cancelText: "Отмена",
+            danger: action === "delete",
+          },
+        );
+        if (!proceed) return;
+
+        try {
+          const res = await fetch(`http://localhost:3000/admin/reports/${report.id}/resolve`, {
+            method: "PUT",
+            headers: authHeaders(),
+            body: JSON.stringify({ action }),
+          });
+          const data = await res.json();
+          notifyUser(data.message || "Готово", res.ok ? "success" : "error");
+          if (res.ok) {
+            loadReports();
+            if (report.target_type === "bot") loadBots();
+            if (report.target_type === "profile") loadUsers();
+          }
+        } catch {
+          notifyUser("Ошибка обработки жалобы", "error");
+        }
+      }
+
+      function renderReports(items) {
+        reportsList.innerHTML = "";
+        if (!items.length) {
+          reportsEmpty.style.display = "block";
+          return;
+        }
+        reportsEmpty.style.display = "none";
+
+        items.forEach((report) => {
+          const card = document.createElement("article");
+          card.className = "admin-card";
+          const targetLabel =
+            report.target_type === "bot"
+              ? `Бот: ${report.bot_name || `#${report.target_id}`}`
+              : `Профиль: @${report.profile_name || report.target_id}`;
+          const targetLink =
+            report.target_type === "bot"
+              ? `/pages/bot.html?id=${encodeURIComponent(report.target_id)}`
+              : `/pages/profile.html?authorId=${encodeURIComponent(report.target_id)}&username=${encodeURIComponent(report.profile_name || "")}`;
+          const reporterLink = `/pages/profile.html?authorId=${encodeURIComponent(report.reporter_id || "")}&username=${encodeURIComponent(report.reporter_name || "")}`;
+          const statusLabel =
+            report.status === "pending"
+              ? "Ожидает"
+              : report.status === "accepted"
+                ? "Принята"
+                : "Отклонена";
+
+          card.innerHTML = `
+            <div class="admin-card-body">
+              <div class="user-head-admin">
+                <div class="user-head-meta">
+                  <strong>Жалоба #${report.id}</strong>
+                  <span>От: <a href="${reporterLink}" class="admin-inline-link">@${escapeHtml(report.reporter_name || report.reporter_id || "unknown")}</a></span>
+                  <span><a href="${targetLink}" class="admin-inline-link">${escapeHtml(targetLabel)}</a></span>
+                  <span>${escapeHtml(statusLabel)} · ${escapeHtml(formatReportDate(report.created_at))}</span>
+                </div>
+              </div>
+
+              <div class="admin-grid">
+                <label class="full-width">
+                  <span>Причина</span>
+                  <input type="text" value="${escapeHtml(report.reason || "")}" readonly disabled>
+                </label>
+                <label class="full-width">
+                  <span>Детали</span>
+                  <input type="text" value="${escapeHtml(report.details || "—")}" readonly disabled>
+                </label>
+              </div>
+
+              <div class="admin-actions">
+                ${
+                  report.status === "pending"
+                    ? `
+                      <button class="action-btn secondary report-action-btn" data-action="block">Принять и блокировать</button>
+                      <button class="action-btn danger report-action-btn" data-action="delete">Принять и удалить</button>
+                      <button class="action-btn report-action-btn" data-action="dismiss">Отклонить</button>
+                    `
+                    : `<span class="empty-state">Решение: ${escapeHtml(report.resolution_action || "—")} (${escapeHtml(formatReportDate(report.resolved_at))})</span>`
+                }
+              </div>
+            </div>
+          `;
+
+          card.querySelectorAll(".report-action-btn").forEach((btn) => {
+            btn.addEventListener("click", () => resolveReport(report, btn.dataset.action));
+          });
+
+          reportsList.appendChild(card);
+        });
+      }
+
       function applyFilters() {
         const q = globalSearch.value.trim().toLowerCase();
 
@@ -501,8 +625,28 @@
               .includes(q),
         );
 
+        const filteredReports = allReports.filter(
+          (item) =>
+            !q ||
+            [
+              item.id,
+              item.reporter_name,
+              item.target_type,
+              item.target_id,
+              item.reason,
+              item.details,
+              item.status,
+              item.bot_name,
+              item.profile_name,
+            ]
+              .join(" ")
+              .toLowerCase()
+              .includes(q),
+        );
+
         renderUsers(filteredUsers);
         renderBots(filteredBots);
+        renderReports(filteredReports);
       }
 
       globalSearch.addEventListener("input", applyFilters);
@@ -539,8 +683,24 @@
         }
       }
 
+      async function loadReports() {
+        try {
+          const res = await fetch("http://localhost:3000/admin/reports", {
+            headers: authHeaders(),
+          });
+          const data = await res.json();
+          allReports = Array.isArray(data) ? data : [];
+          applyFilters();
+        } catch {
+          notifyUser("Ошибка загрузки жалоб", "error");
+          reportsEmpty.style.display = "block";
+          reportsEmpty.textContent = "Ошибка загрузки жалоб";
+        }
+      }
+
       loadUsers();
       loadBots();
+      loadReports();
     </script>
   </body>
 </html>

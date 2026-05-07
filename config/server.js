@@ -194,6 +194,54 @@ function ensureBotBlockedColumn() {
   });
 }
 
+function ensureBotDeletedColumn() {
+  const sql = `
+    ALTER TABLE bots
+    ADD COLUMN is_deleted TINYINT(1) NOT NULL DEFAULT 0 AFTER is_blocked
+  `;
+
+  db.query(sql, (err) => {
+    if (!err) {
+      console.log("БД: добавлена колонка bots.is_deleted");
+      return;
+    }
+    if (err.code === "ER_DUP_FIELDNAME") {
+      return;
+    }
+    console.warn("БД: не удалось проверить/добавить bots.is_deleted —", err.message);
+  });
+}
+
+function ensureReportsTable() {
+  const sql = `
+    CREATE TABLE IF NOT EXISTS reports (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      reporter_id INT NOT NULL,
+      target_type ENUM('bot', 'profile') NOT NULL,
+      target_id INT NOT NULL,
+      reason VARCHAR(255) NOT NULL DEFAULT '',
+      details TEXT,
+      status ENUM('pending', 'accepted', 'dismissed') NOT NULL DEFAULT 'pending',
+      resolution_action ENUM('block', 'delete', 'dismiss') DEFAULT NULL,
+      resolved_by INT DEFAULT NULL,
+      resolved_at DATETIME DEFAULT NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_reports_status_created (status, created_at),
+      INDEX idx_reports_target (target_type, target_id),
+      INDEX idx_reports_reporter (reporter_id)
+    )
+  `;
+
+  db.query(sql, (err) => {
+    if (err) {
+      console.warn("БД: не удалось создать таблицу reports —", err.message);
+      return;
+    }
+    console.log("БД: таблица reports готова");
+  });
+}
+
 async function getOwnedChat(chatId, userId) {
   const rows = await dbQuery(
     `
@@ -252,6 +300,63 @@ function requireUserIdFromQuery(req, res) {
     return null;
   }
   return userId;
+}
+
+function deleteBotByAdmin(botId, callback) {
+  db.query(
+    `
+      UPDATE bots
+      SET is_deleted = 1, is_blocked = 1, visibility = 'private', updated_at = NOW()
+      WHERE id = ?
+    `,
+    [botId],
+    (botErr, result) => {
+      if (botErr) return callback(botErr);
+      callback(null, result);
+    },
+  );
+}
+
+function deleteUserByAdmin(userId, callback) {
+  const deleteMessagesSql = `
+    DELETE m
+    FROM messages m
+    INNER JOIN chats c ON m.chat_id = c.id
+    WHERE c.user_id = ?
+  `;
+
+  db.query(deleteMessagesSql, [userId], (messagesErr) => {
+    if (messagesErr) return callback(messagesErr);
+    db.query("DELETE FROM chats WHERE user_id = ?", [userId], (chatsErr) => {
+      if (chatsErr) return callback(chatsErr);
+      const deleteBotsMessagesSql = `
+        DELETE m
+        FROM messages m
+        INNER JOIN chats c ON m.chat_id = c.id
+        INNER JOIN bots b ON c.bot_id = b.id
+        WHERE b.creator_id = ?
+      `;
+      db.query(deleteBotsMessagesSql, [userId], (bmErr) => {
+        if (bmErr) return callback(bmErr);
+        const deleteBotsChatsSql = `
+          DELETE c
+          FROM chats c
+          INNER JOIN bots b ON c.bot_id = b.id
+          WHERE b.creator_id = ?
+        `;
+        db.query(deleteBotsChatsSql, [userId], (bcErr) => {
+          if (bcErr) return callback(bcErr);
+          db.query("DELETE FROM bots WHERE creator_id = ?", [userId], (botsErr) => {
+            if (botsErr) return callback(botsErr);
+            db.query("DELETE FROM users WHERE id = ?", [userId], (userErr, result) => {
+              if (userErr) return callback(userErr);
+              callback(null, result);
+            });
+          });
+        });
+      });
+    });
+  });
 }
 
 function deleteChatsForUserBotPersona(userId, botId, personaId, callback) {
@@ -686,6 +791,8 @@ app.get("/my-bots/:userId", (req, res) => {
       greeting_message,
       system_prompt,
       visibility,
+      is_blocked,
+      is_deleted,
       tags,
       created_at,
       updated_at
@@ -720,6 +827,8 @@ app.get("/bot/:id", (req, res) => {
       b.greeting_message,
       b.system_prompt,
       b.visibility,
+      b.is_blocked,
+      b.is_deleted,
       b.tags,
       b.created_at,
       b.updated_at,
@@ -929,6 +1038,13 @@ app.get("/chat-thread/:botId", (req, res) => {
   if (userId == null) return;
   const personaId = parsePersonaIdFromQuery(req);
 
+  const botStateSql = `
+    SELECT id, COALESCE(is_blocked, 0) AS is_blocked, COALESCE(is_deleted, 0) AS is_deleted
+    FROM bots
+    WHERE id = ?
+    LIMIT 1
+  `;
+
   const statsSql = `
     SELECT
       c.id AS chat_id,
@@ -962,12 +1078,30 @@ app.get("/chat-thread/:botId", (req, res) => {
     });
   };
 
-  db.query(statsSql, [userId, botId, personaId], (err, rows) => {
+  db.query(botStateSql, [botId], (botErr, botRows) => {
+    if (botErr) {
+      return res.status(500).json({ message: "Ошибка проверки бота" });
+    }
+    if (!botRows.length) {
+      return res.status(404).json({ message: "Бот не найден" });
+    }
+    const isRestricted =
+      Number(botRows[0].is_blocked) === 1 || Number(botRows[0].is_deleted) === 1;
+
+    db.query(statsSql, [userId, botId, personaId], (err, rows) => {
     if (err) {
       return res.status(500).json({ message: "Ошибка проверки чата" });
     }
     if (rows.length) {
-      return respondWithRow(rows[0]);
+        return res.json({
+          ...{
+            exists: true,
+            chat_id: Number(rows[0].chat_id),
+            message_count: Number(rows[0].message_count) || 0,
+            has_user_messages: (Number(rows[0].user_message_count) || 0) > 0,
+          },
+          is_restricted: isRestricted,
+        });
     }
     if (personaId == null) {
       return res.json({
@@ -975,9 +1109,10 @@ app.get("/chat-thread/:botId", (req, res) => {
         chat_id: null,
         message_count: 0,
         has_user_messages: false,
+          is_restricted: isRestricted,
       });
     }
-    hasConcretePersonaChatForUserBot(userId, botId, (hcErr, hasConcrete) => {
+      hasConcretePersonaChatForUserBot(userId, botId, (hcErr, hasConcrete) => {
       if (hcErr) {
         return res.status(500).json({ message: "Ошибка проверки чата" });
       }
@@ -987,6 +1122,7 @@ app.get("/chat-thread/:botId", (req, res) => {
           chat_id: null,
           message_count: 0,
           has_user_messages: false,
+          is_restricted: isRestricted,
         });
       }
       db.query(legacyStatsSql, [userId, botId], (legErr, legRows) => {
@@ -999,6 +1135,7 @@ app.get("/chat-thread/:botId", (req, res) => {
             chat_id: null,
             message_count: 0,
             has_user_messages: false,
+            is_restricted: isRestricted,
           });
         }
         const row = legRows[0];
@@ -1006,8 +1143,15 @@ app.get("/chat-thread/:botId", (req, res) => {
           if (upErr) {
             return res.status(500).json({ message: "Ошибка привязки чата к персоне" });
           }
-          return respondWithRow(row);
+          return res.json({
+            exists: true,
+            chat_id: Number(row.chat_id),
+            message_count: Number(row.message_count) || 0,
+            has_user_messages: (Number(row.user_message_count) || 0) > 0,
+            is_restricted: isRestricted,
+          });
         });
+      });
       });
     });
   });
@@ -1028,7 +1172,9 @@ app.get("/chat-by-bot/:botId", (req, res) => {
       greeting_message,
       short_description,
       full_description,
-      system_prompt
+      system_prompt,
+      COALESCE(is_blocked, 0) AS is_blocked,
+      COALESCE(is_deleted, 0) AS is_deleted
     FROM bots
     WHERE id = ?
     LIMIT 1
@@ -1048,6 +1194,8 @@ app.get("/chat-by-bot/:botId", (req, res) => {
     }
 
     const bot = botRows[0];
+    const isRestrictedBot =
+      Number(bot.is_blocked) === 1 || Number(bot.is_deleted) === 1;
 
     const findChatSql = `
       SELECT
@@ -1059,7 +1207,12 @@ app.get("/chat-by-bot/:botId", (req, res) => {
         summary,
         visibility,
         created_at,
-        updated_at
+        updated_at,
+        (
+          SELECT COUNT(*)
+          FROM messages um
+          WHERE um.chat_id = chats.id AND um.sender_type = 'user'
+        ) AS user_message_count
       FROM chats
       WHERE user_id = ? AND bot_id = ? AND (persona_id <=> ?)
       ORDER BY updated_at DESC, id DESC
@@ -1162,6 +1315,13 @@ app.get("/chat-by-bot/:botId", (req, res) => {
       );
     };
 
+    if (createNewChat && isRestrictedBot) {
+      return res.status(403).json({
+        message:
+          "Этот бот заблокирован. Новый чат создать нельзя, можно только продолжить существующий.",
+      });
+    }
+
     if (createNewChat) {
       deleteChatsForUserBotPersona(userId, botId, personaId, (delErr) => {
         if (delErr) {
@@ -1192,8 +1352,18 @@ app.get("/chat-by-bot/:botId", (req, res) => {
         });
       }
 
-      if (chatRows.length > 0) {
+      if (
+        chatRows.length > 0 &&
+        (!isRestrictedBot || Number(chatRows[0].user_message_count || 0) > 0)
+      ) {
         return sendFullChat(chatRows[0]);
+      }
+
+      if (isRestrictedBot) {
+        return res.status(403).json({
+          message:
+            "Этот бот заблокирован. Новый чат создать нельзя, можно только продолжить существующий.",
+        });
       }
 
       if (personaId == null) {
@@ -1718,6 +1888,8 @@ app.get("/my-chats/:userId", (req, res) => {
       c.updated_at,
       b.name AS bot_name,
       b.avatar_url,
+      COALESCE(b.is_blocked, 0) AS bot_is_blocked,
+      COALESCE(b.is_deleted, 0) AS bot_is_deleted,
       (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id) AS messages_count
     FROM chats c
     LEFT JOIN bots b ON c.bot_id = b.id
@@ -1734,6 +1906,142 @@ app.get("/my-chats/:userId", (req, res) => {
 
     res.json(rows);
   });
+});
+
+/* Жалобы пользователей */
+app.post("/reports", (req, res) => {
+  const reporterId = Number(req.body?.reporter_id);
+  const targetTypeRaw = String(req.body?.target_type || "").trim().toLowerCase();
+  const targetType = targetTypeRaw === "profile" ? "profile" : targetTypeRaw === "bot" ? "bot" : "";
+  const targetId = Number(req.body?.target_id);
+  const reason = String(req.body?.reason || "").trim();
+  const details = String(req.body?.details || "").trim();
+
+  if (!Number.isFinite(reporterId) || reporterId < 1) {
+    return res.status(400).json({ message: "Некорректный автор жалобы" });
+  }
+  if (!targetType || !Number.isFinite(targetId) || targetId < 1) {
+    return res.status(400).json({ message: "Некорректная цель жалобы" });
+  }
+  if (!reason) {
+    return res.status(400).json({ message: "Укажите причину жалобы" });
+  }
+
+  const finishInsert = () => {
+    db.query(
+      `
+        INSERT INTO reports (reporter_id, target_type, target_id, reason, details, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'pending', NOW(), NOW())
+      `,
+      [reporterId, targetType, targetId, reason, details],
+      (insertErr) => {
+        if (insertErr) {
+          return res.status(500).json({ message: "Ошибка создания жалобы" });
+        }
+        res.json({ message: "Жалоба отправлена ✅" });
+      },
+    );
+  };
+
+  db.query(
+    "SELECT id, role_id FROM users WHERE id = ? LIMIT 1",
+    [reporterId],
+    (reporterErr, reporterRows) => {
+      if (reporterErr) return res.status(500).json({ message: "Ошибка проверки автора жалобы" });
+      if (!reporterRows.length) return res.status(404).json({ message: "Автор жалобы не найден" });
+      if (Number(reporterRows[0].role_id) === 2) {
+        return res.status(403).json({
+          message: "Администратор не может отправлять жалобы — используйте блокировку/удаление",
+        });
+      }
+
+      if (targetType === "profile") {
+        if (Number(targetId) === Number(reporterId)) {
+          return res.status(400).json({ message: "Нельзя жаловаться на самого себя" });
+        }
+
+        db.query("SELECT id FROM users WHERE id = ? LIMIT 1", [targetId], (userErr, users) => {
+          if (userErr) return res.status(500).json({ message: "Ошибка проверки профиля" });
+          if (!users.length) return res.status(404).json({ message: "Профиль не найден" });
+          finishInsert();
+        });
+        return;
+      }
+
+      db.query(
+        "SELECT id, creator_id FROM bots WHERE id = ? LIMIT 1",
+        [targetId],
+        (botErr, bots) => {
+          if (botErr) return res.status(500).json({ message: "Ошибка проверки бота" });
+          if (!bots.length) return res.status(404).json({ message: "Бот не найден" });
+          if (Number(bots[0].creator_id) === Number(reporterId)) {
+            return res.status(400).json({ message: "Нельзя жаловаться на своего бота" });
+          }
+          finishInsert();
+        },
+      );
+    },
+  );
+});
+
+/* Обжалование блокировки/удаления ботом его автором */
+app.post("/reports/appeal", (req, res) => {
+  const reporterId = Number(req.body?.reporter_id);
+  const botId = Number(req.body?.bot_id);
+  const reason = String(req.body?.reason || "").trim();
+
+  if (!Number.isFinite(reporterId) || reporterId < 1) {
+    return res.status(400).json({ message: "Некорректный автор обращения" });
+  }
+  if (!Number.isFinite(botId) || botId < 1) {
+    return res.status(400).json({ message: "Некорректный бот для обжалования" });
+  }
+  if (!reason) {
+    return res.status(400).json({ message: "Укажите причину обжалования" });
+  }
+
+  db.query(
+    "SELECT id, role_id FROM users WHERE id = ? LIMIT 1",
+    [reporterId],
+    (reporterErr, reporterRows) => {
+      if (reporterErr) return res.status(500).json({ message: "Ошибка проверки автора обращения" });
+      if (!reporterRows.length) return res.status(404).json({ message: "Пользователь не найден" });
+      if (Number(reporterRows[0].role_id) === 2) {
+        return res.status(403).json({ message: "Администратор не использует обжалование" });
+      }
+
+      db.query(
+        "SELECT id, creator_id, COALESCE(is_blocked, 0) AS is_blocked, COALESCE(is_deleted, 0) AS is_deleted FROM bots WHERE id = ? LIMIT 1",
+        [botId],
+        (botErr, botRows) => {
+          if (botErr) return res.status(500).json({ message: "Ошибка проверки бота" });
+          if (!botRows.length) return res.status(404).json({ message: "Бот не найден" });
+
+          const bot = botRows[0];
+          if (Number(bot.creator_id) !== Number(reporterId)) {
+            return res.status(403).json({ message: "Обжалование может подать только автор бота" });
+          }
+
+          const isRestricted = Number(bot.is_blocked) === 1 || Number(bot.is_deleted) === 1;
+          if (!isRestricted) {
+            return res.status(400).json({ message: "Этот бот не заблокирован и не удален" });
+          }
+
+          db.query(
+            `
+              INSERT INTO reports (reporter_id, target_type, target_id, reason, details, status, created_at, updated_at)
+              VALUES (?, 'bot', ?, ?, 'appeal', 'pending', NOW(), NOW())
+            `,
+            [reporterId, botId, `Апелляция автора: ${reason}`],
+            (insertErr) => {
+              if (insertErr) return res.status(500).json({ message: "Ошибка отправки обжалования" });
+              res.json({ message: "Обжалование отправлено ✅" });
+            },
+          );
+        },
+      );
+    },
+  );
 });
 
 /*Начало Админ. Получение пользователей*/
@@ -1833,83 +2141,15 @@ app.delete("/admin/users/:id", requireAdmin, (req, res) => {
     });
   }
 
-  const deleteMessagesSql = `
-    DELETE m
-    FROM messages m
-    INNER JOIN chats c ON m.chat_id = c.id
-    WHERE c.user_id = ?
-  `;
-
-  db.query(deleteMessagesSql, [id], (messagesErr) => {
-    if (messagesErr) {
+  deleteUserByAdmin(id, (err) => {
+    if (err) {
       return res.status(500).json({
-        message: "Ошибка удаления сообщений пользователя",
+        message: "Ошибка удаления пользователя",
       });
     }
 
-    const deleteChatsSql = `DELETE FROM chats WHERE user_id = ?`;
-
-    db.query(deleteChatsSql, [id], (chatsErr) => {
-      if (chatsErr) {
-        return res.status(500).json({
-          message: "Ошибка удаления чатов пользователя",
-        });
-      }
-
-      const deleteBotsMessagesSql = `
-        DELETE m
-        FROM messages m
-        INNER JOIN chats c ON m.chat_id = c.id
-        INNER JOIN bots b ON c.bot_id = b.id
-        WHERE b.creator_id = ?
-      `;
-
-      db.query(deleteBotsMessagesSql, [id], (bmErr) => {
-        if (bmErr) {
-          return res.status(500).json({
-            message: "Ошибка удаления сообщений ботов пользователя",
-          });
-        }
-
-        const deleteBotsChatsSql = `
-          DELETE c
-          FROM chats c
-          INNER JOIN bots b ON c.bot_id = b.id
-          WHERE b.creator_id = ?
-        `;
-
-        db.query(deleteBotsChatsSql, [id], (bcErr) => {
-          if (bcErr) {
-            return res.status(500).json({
-              message: "Ошибка удаления чатов ботов пользователя",
-            });
-          }
-
-          const deleteBotsSql = `DELETE FROM bots WHERE creator_id = ?`;
-
-          db.query(deleteBotsSql, [id], (botsErr) => {
-            if (botsErr) {
-              return res.status(500).json({
-                message: "Ошибка удаления ботов пользователя",
-              });
-            }
-
-            const deleteUserSql = `DELETE FROM users WHERE id = ?`;
-
-            db.query(deleteUserSql, [id], (userErr) => {
-              if (userErr) {
-                return res.status(500).json({
-                  message: "Ошибка удаления пользователя",
-                });
-              }
-
-              res.json({
-                message: "Пользователь удалён ✅",
-              });
-            });
-          });
-        });
-      });
+    res.json({
+      message: "Пользователь удалён ✅",
     });
   });
 });
@@ -1923,6 +2163,7 @@ app.get("/admin/bots", requireAdmin, (req, res) => {
       b.avatar_url,
       b.visibility,
       b.is_blocked,
+      b.is_deleted,
       b.tags,
       b.created_at,
       u.username AS author_name
@@ -1979,45 +2220,139 @@ app.put("/admin/bots/:id/block", requireAdmin, (req, res) => {
 /*Удаление бота админом*/
 app.delete("/admin/bots/:id", requireAdmin, (req, res) => {
   const { id } = req.params;
-
-  const deleteMessagesSql = `
-    DELETE m
-    FROM messages m
-    INNER JOIN chats c ON m.chat_id = c.id
-    WHERE c.bot_id = ?
-  `;
-
-  db.query(deleteMessagesSql, [id], (messagesErr) => {
-    if (messagesErr) {
+  deleteBotByAdmin(id, (err) => {
+    if (err) {
       return res.status(500).json({
-        message: "Ошибка удаления сообщений бота",
+        message: "Ошибка удаления бота",
       });
     }
 
-    const deleteChatsSql = `DELETE FROM chats WHERE bot_id = ?`;
+    res.json({
+      message: "Бот удалён ✅",
+    });
+  });
+});
 
-    db.query(deleteChatsSql, [id], (chatsErr) => {
-      if (chatsErr) {
-        return res.status(500).json({
-          message: "Ошибка удаления чатов бота",
+app.get("/admin/reports", requireAdmin, (req, res) => {
+  const sql = `
+    SELECT
+      r.id,
+      r.reporter_id,
+      reporter.username AS reporter_name,
+      r.target_type,
+      r.target_id,
+      r.reason,
+      r.details,
+      r.status,
+      r.resolution_action,
+      r.resolved_by,
+      resolver.username AS resolver_name,
+      r.resolved_at,
+      r.created_at,
+      b.name AS bot_name,
+      u.username AS profile_name
+    FROM reports r
+    LEFT JOIN users reporter ON reporter.id = r.reporter_id
+    LEFT JOIN users resolver ON resolver.id = r.resolved_by
+    LEFT JOIN bots b ON r.target_type = 'bot' AND b.id = r.target_id
+    LEFT JOIN users u ON r.target_type = 'profile' AND u.id = r.target_id
+    ORDER BY
+      CASE WHEN r.status = 'pending' THEN 0 ELSE 1 END,
+      r.created_at DESC,
+      r.id DESC
+  `;
+
+  db.query(sql, (err, rows) => {
+    if (err) {
+      return res.status(500).json({ message: "Ошибка загрузки жалоб" });
+    }
+    res.json(rows);
+  });
+});
+
+app.put("/admin/reports/:id/resolve", requireAdmin, (req, res) => {
+  const reportId = Number(req.params.id);
+  const action = String(req.body?.action || "").trim().toLowerCase();
+  const resolverId = Number(req.headers["x-user-id"]);
+
+  if (!Number.isFinite(reportId) || reportId < 1) {
+    return res.status(400).json({ message: "Некорректный id жалобы" });
+  }
+  if (!["block", "delete", "dismiss"].includes(action)) {
+    return res.status(400).json({ message: "Некорректное действие" });
+  }
+
+  db.query(
+    `
+      SELECT id, target_type, target_id, status
+      FROM reports
+      WHERE id = ?
+      LIMIT 1
+    `,
+    [reportId],
+    (reportErr, reportRows) => {
+      if (reportErr) return res.status(500).json({ message: "Ошибка загрузки жалобы" });
+      if (!reportRows.length) return res.status(404).json({ message: "Жалоба не найдена" });
+
+      const report = reportRows[0];
+      if (report.status !== "pending") {
+        return res.status(400).json({ message: "Жалоба уже обработана" });
+      }
+
+      const finalize = (status, resolutionAction, message) => {
+        db.query(
+          `
+            UPDATE reports
+            SET status = ?, resolution_action = ?, resolved_by = ?, resolved_at = NOW(), updated_at = NOW()
+            WHERE id = ?
+          `,
+          [status, resolutionAction, resolverId, reportId],
+          (updateErr) => {
+            if (updateErr) return res.status(500).json({ message: "Ошибка сохранения решения" });
+            res.json({ message });
+          },
+        );
+      };
+
+      if (action === "dismiss") {
+        return finalize("dismissed", "dismiss", "Жалоба отклонена");
+      }
+
+      if (report.target_type === "bot") {
+        if (action === "block") {
+          return db.query(
+            "UPDATE bots SET is_blocked = 1, updated_at = NOW() WHERE id = ?",
+            [report.target_id],
+            (blockErr) => {
+              if (blockErr) return res.status(500).json({ message: "Ошибка блокировки бота" });
+              finalize("accepted", "block", "Жалоба принята: бот заблокирован");
+            },
+          );
+        }
+
+        return deleteBotByAdmin(report.target_id, (deleteErr) => {
+          if (deleteErr) return res.status(500).json({ message: "Ошибка удаления бота" });
+          finalize("accepted", "delete", "Жалоба принята: бот удалён");
         });
       }
 
-      const deleteBotSql = `DELETE FROM bots WHERE id = ?`;
+      if (action === "block") {
+        return db.query(
+          "UPDATE users SET is_blocked = 1 WHERE id = ?",
+          [report.target_id],
+          (blockErr) => {
+            if (blockErr) return res.status(500).json({ message: "Ошибка блокировки профиля" });
+            finalize("accepted", "block", "Жалоба принята: профиль заблокирован");
+          },
+        );
+      }
 
-      db.query(deleteBotSql, [id], (err) => {
-        if (err) {
-          return res.status(500).json({
-            message: "Ошибка удаления бота",
-          });
-        }
-
-        res.json({
-          message: "Бот удалён ✅",
-        });
+      deleteUserByAdmin(report.target_id, (deleteErr) => {
+        if (deleteErr) return res.status(500).json({ message: "Ошибка удаления профиля" });
+        finalize("accepted", "delete", "Жалоба принята: профиль удалён");
       });
-    });
-  });
+    },
+  );
 });
 
 app.get("/admin/chats", requireAdmin, (req, res) => {
@@ -2094,7 +2429,10 @@ app.get("/all-bots", (req, res) => {
       u.username AS author_name
     FROM bots b
     LEFT JOIN users u ON b.creator_id = u.id
-    WHERE b.visibility = 'public' AND COALESCE(b.is_blocked, 0) = 0
+    WHERE
+      b.visibility = 'public'
+      AND COALESCE(b.is_blocked, 0) = 0
+      AND COALESCE(b.is_deleted, 0) = 0
     ORDER BY b.created_at DESC
   `;
 
@@ -2508,6 +2846,8 @@ function startHttpServer(port) {
         ensurePersonaRoleColumn();
         ensureUserBlockedColumn();
         ensureBotBlockedColumn();
+        ensureBotDeletedColumn();
+        ensureReportsTable();
       }
     });
   });

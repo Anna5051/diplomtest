@@ -288,6 +288,7 @@
 
     let currentChatId = null;
     let currentBot = null;
+    let isRestrictedBot = false;
     let messageRows = [];
     let editingMessageId = null;
 
@@ -1118,6 +1119,8 @@
 
         currentChatId = data.chat.id;
         currentBot = data.bot;
+        isRestrictedBot =
+          Number(data.bot?.is_blocked) === 1 || Number(data.bot?.is_deleted) === 1;
 
         chatBotName.textContent = data.bot?.name || "Без имени";
         chatTopTitle.textContent = data.bot?.name || "Чат";
@@ -1131,6 +1134,10 @@
 
         chatBotAvatar.src = data.bot?.avatar_url || "/img/icon.svg";
         chatInput.placeholder = `Сообщение для ${data.bot?.name || "персонажа"}...`;
+        newChatBtn.disabled = isRestrictedBot;
+        newChatBtn.title = isRestrictedBot
+          ? "Новый чат с этим ботом недоступен"
+          : "";
 
         clearMessages();
         messageRows = Array.isArray(data.messages) ? [...data.messages] : [];
@@ -1496,6 +1503,10 @@
     });
 
     newChatBtn.addEventListener("click", () => {
+      if (isRestrictedBot) {
+        showToast("Новый чат с этим ботом недоступен");
+        return;
+      }
       if (!botId) {
         showToast("Не найден id персонажа");
         return;

@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/css/general.css" />
   <link rel="stylesheet" href="/css/main.css" />
   <script src="/js/notifications.js" defer></script>
+  <script src="/js/siteDialogs.js" defer></script>
 </head>
 <body>
 <header class="topbar">
@@ -350,6 +351,10 @@ function renderBots(items) {
       mainChatPersonaPid && String(mainChatPersonaPid).trim() !== ""
         ? `&persona=${encodeURIComponent(mainChatPersonaPid)}`
         : "";
+    const isRestrictedBot =
+      Number(bot.is_blocked) === 1 || Number(bot.is_deleted) === 1;
+    const canAppeal =
+      Number(bot.creator_id) === Number(savedUser.id) && isRestrictedBot;
 
     card.innerHTML = `
       <div class="bot-image-wrap">
@@ -371,6 +376,11 @@ function renderBots(items) {
         <div class="bot-title-row">
           <div>
             <h3>${escapeHtml(bot.name)}</h3>
+            ${
+              isRestrictedBot
+                ? `<span class="bot-restricted-badge">Заблокирован</span>`
+                : ""
+            }
             <p class="bot-author">
               <a href="${authorProfileUrl}" class="author-link">
                 @${escapeHtml(bot.author || "unknown")}
@@ -391,15 +401,29 @@ function renderBots(items) {
         </div>
 
         <div class="bot-actions">
-          <a href="/pages/bot.html?id=${bot.id}" class="card-btn">Открыть</a>
-          <a href="/pages/chat.html?id=${bot.id}${mainChatPersonaQs}" class="card-btn primary">Чат</a>
+          ${
+            isRestrictedBot
+              ? `<button type="button" class="card-btn is-disabled" disabled title="Бот заблокирован">Открыть</button>
+                 <button type="button" class="card-btn primary is-disabled" disabled title="Бот заблокирован">Чат</button>`
+              : `<a href="/pages/bot.html?id=${bot.id}" class="card-btn">Открыть</a>
+                 <a href="/pages/chat.html?id=${bot.id}${mainChatPersonaQs}" class="card-btn primary">Чат</a>`
+          }
         </div>
+        ${
+          canAppeal
+            ? `<button type="button" class="bot-appeal-btn" data-appeal-bot-id="${bot.id}">Обжаловать</button>`
+            : ""
+        }
       </div>
     `;
 
     const favoriteBtn = card.querySelector(".favorite-btn");
 
     favoriteBtn.addEventListener("click", () => {
+      if (isRestrictedBot) {
+        notifyUser("Бот заблокирован: взаимодействие недоступно", "warning");
+        return;
+      }
       const next = toggleFavoriteBot(bot.id);
       favoriteBtn.classList.toggle("active", next);
       favoriteBtn.title = next
@@ -410,6 +434,33 @@ function renderBots(items) {
         applySearch();
       }
     });
+
+    const appealBtn = card.querySelector(".bot-appeal-btn");
+    if (appealBtn) {
+      appealBtn.addEventListener("click", async () => {
+        const reason = await sitePrompt("Укажите причину обжалования:", {
+          title: "Обжалование блокировки",
+          placeholder: "например: блокировка ошибочна, прошу пересмотреть",
+          confirmText: "Отправить",
+        });
+        if (!reason || !String(reason).trim()) return;
+        try {
+          const response = await fetch(`${API_BASE}/reports/appeal`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reporter_id: savedUser.id,
+              bot_id: bot.id,
+              reason: String(reason).trim(),
+            }),
+          });
+          const payload = await response.json();
+          notifyUser(payload.message || "Обжалование отправлено", response.ok ? "success" : "error");
+        } catch {
+          notifyUser("Не удалось отправить обжалование", "error");
+        }
+      });
+    }
 
     cardsGrid.appendChild(card);
   });
@@ -543,6 +594,8 @@ function renderBots(items) {
         system_prompt: bot.system_prompt || "",
         avatar: bot.avatar_url || "/img/icon.svg",
         created_at: bot.created_at || null,
+        is_blocked: bot.is_blocked || 0,
+        is_deleted: bot.is_deleted || 0,
       }));
     } catch {
       myBotsData = [];

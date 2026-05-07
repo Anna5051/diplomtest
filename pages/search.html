@@ -108,6 +108,17 @@
           <input id="tokensMin" type="number" min="0" class="filter-input" placeholder="Не меньше" />
         </div>
 
+        <div class="filter-group">
+          <div class="filter-title">Исключить теги</div>
+          <input
+            id="excludeTagsInput"
+            type="text"
+            class="filter-input"
+            placeholder="через запятую: романтика, драма"
+          />
+          <div class="excluded-tags-preview" id="excludedTagsPreview"></div>
+        </div>
+
         <button class="reset-btn" id="resetFiltersBtn" type="button">
           Сбросить фильтры
         </button>
@@ -156,6 +167,8 @@
     const sortSelect = document.getElementById("sortSelect");
     const messagesMin = document.getElementById("messagesMin");
     const tokensMin = document.getElementById("tokensMin");
+    const excludeTagsInput = document.getElementById("excludeTagsInput");
+    const excludedTagsPreview = document.getElementById("excludedTagsPreview");
     const quickFilters = document.getElementById("quickFilters");
     const clearTagsBtn = document.getElementById("clearTagsBtn");
     const toggleTagsBtn = document.getElementById("toggleTagsBtn");
@@ -165,6 +178,8 @@
     let isAllTagsSelected = false;
     let quickFilter = "all";
     let isTagsCollapsed = false;
+    let excludedTags = [];
+    const EXCLUDED_TAGS_STORAGE_KEY = `excludedSearchTags_${savedUser?.id || "guest"}`;
     const FORBIDDEN_TAGS = new Set([
       "18+",
       "16+",
@@ -199,6 +214,45 @@
 
     function normalizeText(value) {
       return String(value || "").toLowerCase().trim();
+    }
+
+    function parseExcludedTagsInput(value) {
+      return String(value || "")
+        .split(",")
+        .map((tag) => normalizeText(tag))
+        .filter(Boolean)
+        .filter((tag, index, arr) => arr.indexOf(tag) === index)
+        .slice(0, 20);
+    }
+
+    function syncExcludedTagsPreview() {
+      excludedTagsPreview.innerHTML = "";
+      if (!excludedTags.length) {
+        excludedTagsPreview.textContent = "Не исключено";
+        return;
+      }
+      excludedTags.forEach((tag) => {
+        const chip = document.createElement("span");
+        chip.className = "excluded-tag-chip";
+        chip.textContent = translateTag(tag);
+        excludedTagsPreview.appendChild(chip);
+      });
+    }
+
+    function loadExcludedTags() {
+      try {
+        const raw = localStorage.getItem(EXCLUDED_TAGS_STORAGE_KEY);
+        excludedTags = parseExcludedTagsInput(raw || "");
+      } catch {
+        excludedTags = [];
+      }
+      excludeTagsInput.value = excludedTags.join(", ");
+      syncExcludedTagsPreview();
+    }
+
+    function saveExcludedTags() {
+      localStorage.setItem(EXCLUDED_TAGS_STORAGE_KEY, excludedTags.join(","));
+      syncExcludedTagsPreview();
     }
 
     function escapeHtml(text) {
@@ -481,6 +535,17 @@
         );
       }
 
+      if (excludedTags.length) {
+        filtered = filtered.filter((bot) => {
+          const botTags = normalizeText(bot.tags);
+          return !excludedTags.some(
+            (excluded) =>
+              botTags.includes(excluded) ||
+              botTags.includes(excluded.replace(/\s+/g, "_"))
+          );
+        });
+      }
+
       if (only16.checked) {
         filtered = filtered.filter((bot) => {
           const haystack = normalizeText(`${bot.tags} ${bot.short_description} ${bot.full_description}`);
@@ -632,6 +697,11 @@
     only16.addEventListener("change", applyFilters);
     messagesMin.addEventListener("input", applyFilters);
     tokensMin.addEventListener("input", applyFilters);
+    excludeTagsInput.addEventListener("input", () => {
+      excludedTags = parseExcludedTagsInput(excludeTagsInput.value);
+      saveExcludedTags();
+      applyFilters();
+    });
 
     resetFiltersBtn.addEventListener("click", () => {
       globalSearchInput.value = "";
@@ -642,6 +712,9 @@
       sortSelect.value = "popular";
       messagesMin.value = "";
       tokensMin.value = "";
+      excludedTags = [];
+      excludeTagsInput.value = "";
+      saveExcludedTags();
       syncActiveTagUI();
       quickFilters.querySelectorAll(".quick-chip").forEach((chip) => {
         chip.classList.toggle("active", chip.dataset.quick === "all");
@@ -678,6 +751,7 @@
     });
 
     syncActiveTagUI();
+    loadExcludedTags();
     loadBots();
   </script>
 </body>

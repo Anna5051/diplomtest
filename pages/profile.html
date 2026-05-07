@@ -87,6 +87,14 @@
                 >
                   Подписаться
                 </button>
+                <button
+                  class="edit-btn danger-btn"
+                  id="reportProfileBtn"
+                  type="button"
+                  style="display: none"
+                >
+                  Пожаловаться
+                </button>
               </div>
 
               <div class="profile-bio-preview-card">
@@ -232,6 +240,7 @@
       const toggleEditBtn = document.getElementById("toggleEditBtn");
       const logoutBtn = document.getElementById("logoutBtn");
       const followAuthorBtn = document.getElementById("followAuthorBtn");
+      const reportProfileBtn = document.getElementById("reportProfileBtn");
       const profileEditorPanel = document.getElementById("profileEditorPanel");
 
       const profileAvatar = document.getElementById("profileAvatar");
@@ -334,9 +343,12 @@
       }
 
       function updateFollowButtonVisibility(profile) {
+        const isAdmin = Number(savedUser?.role_id) === 2;
         const shouldShow = isExternalProfile && !isOwnProfile(profile);
         followAuthorBtn.hidden = !shouldShow;
         followAuthorBtn.style.display = shouldShow ? "inline-flex" : "none";
+        reportProfileBtn.hidden = !shouldShow || isAdmin;
+        reportProfileBtn.style.display = shouldShow && !isAdmin ? "inline-flex" : "none";
       }
 
       function syncEditToggleButtonState() {
@@ -620,6 +632,42 @@
         updateFollowButton(viewedProfile);
       });
 
+      reportProfileBtn.addEventListener("click", async () => {
+        if (!isExternalProfile || isOwnProfile(viewedProfile)) {
+          notifyUser("Нельзя жаловаться на себя", "warning");
+          return;
+        }
+        if (!viewedProfile?.id) {
+          notifyUser("Не удалось определить профиль для жалобы", "error");
+          return;
+        }
+
+        const reason = await sitePrompt("Причина жалобы на профиль:", {
+          title: "Жалоба на профиль",
+          placeholder: "например: спам, оскорбления, запрещенный контент",
+          confirmText: "Отправить",
+        });
+        if (!reason || !String(reason).trim()) return;
+
+        try {
+          const response = await fetch("http://localhost:3000/reports", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reporter_id: savedUser.id,
+              target_type: "profile",
+              target_id: viewedProfile.id,
+              reason: String(reason).trim(),
+              details: "",
+            }),
+          });
+          const payload = await response.json();
+          notifyUser(payload.message || "Жалоба отправлена", response.ok ? "success" : "error");
+        } catch {
+          notifyUser("Ошибка отправки жалобы", "error");
+        }
+      });
+
       function renderCreatedBots(items) {
         createdBotsList.innerHTML = "";
         createdBotsCount.textContent = `Найдено: ${items.length}`;
@@ -650,6 +698,11 @@
             activePid && String(activePid).trim() !== ""
               ? `&persona=${encodeURIComponent(activePid)}`
               : "";
+          const isRestrictedBot =
+            Number(bot.is_blocked) === 1 || Number(bot.is_deleted) === 1;
+          const canAppeal =
+            Number(bot.creator_id || viewedProfile?.id || 0) === Number(savedUser.id) &&
+            isRestrictedBot;
 
           card.innerHTML = `
             <div class="created-bot-cover-wrap">
@@ -660,22 +713,69 @@
             </div>
             <div class="created-bot-body">
               <h3><a href="/pages/bot.html?id=${bot.id}">${escapeHtml(bot.name || "Без имени")}</a></h3>
+              ${
+                isRestrictedBot
+                  ? `<span class="created-bot-restricted-badge">Заблокирован</span>`
+                  : ""
+              }
               <a href="${authorLink}" class="created-bot-author">@${escapeHtml(authorName)}</a>
               <p>${escapeHtml(bot.short_description || "Описание отсутствует")}</p>
               <div class="created-bot-actions">
-                <a href="/pages/bot.html?id=${bot.id}" class="created-bot-btn">Открыть</a>
-                <a href="/pages/chat.html?id=${bot.id}${chatPersonaQs}" class="created-bot-btn primary">Чат</a>
+                ${
+                  isRestrictedBot
+                    ? `<button type="button" class="created-bot-btn is-disabled" disabled>Открыть</button>
+                       <button type="button" class="created-bot-btn primary is-disabled" disabled>Чат</button>`
+                    : `<a href="/pages/bot.html?id=${bot.id}" class="created-bot-btn">Открыть</a>
+                       <a href="/pages/chat.html?id=${bot.id}${chatPersonaQs}" class="created-bot-btn primary">Чат</a>`
+                }
               </div>
+              ${
+                canAppeal
+                  ? `<button type="button" class="created-bot-appeal-btn" data-appeal-bot-id="${bot.id}">Обжаловать</button>`
+                  : ""
+              }
             </div>
           `;
 
           const favoriteBtn = card.querySelector(".created-bot-favorite");
           favoriteBtn.addEventListener("click", () => {
+            if (isRestrictedBot) {
+              notifyUser("Бот заблокирован: взаимодействие недоступно", "warning");
+              return;
+            }
             const current = localStorage.getItem(favoriteKey) === "true";
             const next = !current;
             localStorage.setItem(favoriteKey, String(next));
             favoriteBtn.classList.toggle("active", next);
           });
+
+          const appealBtn = card.querySelector(".created-bot-appeal-btn");
+          if (appealBtn) {
+            appealBtn.addEventListener("click", async () => {
+              const reason = await sitePrompt("Укажите причину обжалования:", {
+                title: "Обжалование блокировки",
+                placeholder: "например: блокировка ошибочна, прошу пересмотреть",
+                confirmText: "Отправить",
+              });
+              if (!reason || !String(reason).trim()) return;
+
+              try {
+                const response = await fetch("http://localhost:3000/reports/appeal", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    reporter_id: savedUser.id,
+                    bot_id: bot.id,
+                    reason: String(reason).trim(),
+                  }),
+                });
+                const payload = await response.json();
+                notifyUser(payload.message || "Обжалование отправлено", response.ok ? "success" : "error");
+              } catch {
+                notifyUser("Не удалось отправить обжалование", "error");
+              }
+            });
+          }
 
           createdBotsList.appendChild(card);
         });

@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/css/general.css" />
     <link rel="stylesheet" href="/css/bot.css" />
     <script src="/js/notifications.js" defer></script>
+    <script src="/js/siteDialogs.js" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -80,6 +81,14 @@
                 title="Добавить в избранное"
               >
                 <span class="favorite-icon">♡</span>
+              </button>
+              <button
+                class="bot-report-btn"
+                type="button"
+                id="reportBotBtn"
+                style="display: none"
+              >
+                Пожаловаться
               </button>
             </div>
           </div>
@@ -329,6 +338,7 @@
       const topSearchInput = document.getElementById("topSearchInput");
       const topSearchForm = document.getElementById("topSearchForm");
       const favoriteBtn = document.getElementById("favoriteBtn");
+      const reportBotBtn = document.getElementById("reportBotBtn");
       const chatPersonaModal = document.getElementById("chatPersonaModal");
       const chatPersonaList = document.getElementById("chatPersonaList");
       const closeChatPersonaModalBtn = document.getElementById(
@@ -360,6 +370,7 @@
       let activePersona = null;
       let selectedPersonaInModal = null;
       let personaModalFilter = "";
+      let isRestrictedBotForUser = false;
       /** Пользователь нажал «Общаться без персоны» — следующий клик «Чат с…» ведёт в чат без персоны, а не в модалку */
       let explicitChatWithoutPersona = false;
 
@@ -584,6 +595,8 @@
 
       function showOwnerButtons(bot) {
         editBotBtn.style.display = isBotOwner(bot) ? "inline-flex" : "none";
+        const isAdmin = Number(savedUser?.role_id) === 2;
+        reportBotBtn.style.display = isBotOwner(bot) || isAdmin ? "none" : "inline-flex";
       }
 
       function setActivePersona(persona) {
@@ -752,15 +765,25 @@
           const data = await response.json();
           const showContinue =
             response.ok && data.exists && data.has_user_messages;
+          isRestrictedBotForUser = Boolean(data?.is_restricted);
 
           if (showContinue) {
             chatActionsFresh.classList.add("is-hidden");
             chatActionsResume.classList.remove("is-hidden");
+            newChatHeroBtn.disabled = isRestrictedBotForUser;
+            newChatHeroBtn.title = isRestrictedBotForUser
+              ? "Новый чат недоступен: бот заблокирован"
+              : "";
           } else {
             chatActionsResume.classList.add("is-hidden");
             chatActionsFresh.classList.remove("is-hidden");
+            startChatBtn.disabled = isRestrictedBotForUser;
+            startChatBtn.title = isRestrictedBotForUser
+              ? "Чат недоступен: бот заблокирован"
+              : "";
           }
         } catch {
+          isRestrictedBotForUser = false;
           chatActionsResume.classList.add("is-hidden");
           chatActionsFresh.classList.remove("is-hidden");
         }
@@ -892,6 +915,10 @@ accordionSystemPrompt.innerHTML =
       }
 
       startChatBtn.addEventListener("click", () => {
+        if (isRestrictedBotForUser) {
+          notifyUser("Этот бот заблокирован. Можно только продолжить существующий чат из истории.", "warning");
+          return;
+        }
         if (!botId) {
           notifyUser("ID бота не найден", "error");
           return;
@@ -930,6 +957,10 @@ accordionSystemPrompt.innerHTML =
       });
 
       newChatHeroBtn.addEventListener("click", () => {
+        if (isRestrictedBotForUser) {
+          notifyUser("Новый чат с этим ботом недоступен", "warning");
+          return;
+        }
         if (!botId) return;
         goToChatWithPersona(activePersona, { forceNew: true });
       });
@@ -952,6 +983,43 @@ accordionSystemPrompt.innerHTML =
         const current = localStorage.getItem(key) === "true";
         localStorage.setItem(key, String(!current));
         updateFavoriteButton();
+      });
+
+      reportBotBtn.addEventListener("click", async () => {
+        if (!savedUser?.id || !currentBot?.id) {
+          notifyUser("Нужно войти в аккаунт", "warning");
+          return;
+        }
+
+        if (isBotOwner(currentBot)) {
+          notifyUser("Нельзя жаловаться на своего бота", "warning");
+          return;
+        }
+
+        const reason = await sitePrompt("Причина жалобы на бота:", {
+          title: "Жалоба на бота",
+          placeholder: "например: оскорбления, спам, запрещенный контент",
+          confirmText: "Отправить",
+        });
+        if (!reason || !String(reason).trim()) return;
+
+        try {
+          const response = await fetch("http://localhost:3000/reports", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reporter_id: savedUser.id,
+              target_type: "bot",
+              target_id: currentBot.id,
+              reason: String(reason).trim(),
+              details: "",
+            }),
+          });
+          const payload = await response.json();
+          notifyUser(payload.message || "Жалоба отправлена", response.ok ? "success" : "error");
+        } catch {
+          notifyUser("Ошибка отправки жалобы", "error");
+        }
       });
 
       closeChatPersonaModalBtn.addEventListener("click", closeChatPersonaModal);

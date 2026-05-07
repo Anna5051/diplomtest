@@ -134,6 +134,8 @@
       items.forEach((chat) => {
         const title = chat.bot_name || chat.title || "Без названия";
         const summary = chat.summary || `Последний чат с персонажем ${title}`;
+        const isRestrictedBot =
+          Number(chat.bot_is_blocked) === 1 || Number(chat.bot_is_deleted) === 1;
 
         const card = document.createElement("article");
         card.className = "chat-card";
@@ -144,7 +146,7 @@
           </div>
 
           <div class="chat-info">
-            <h3>🔒 ${escapeHtml(title)}</h3>
+            <h3>🔒 ${escapeHtml(title)} ${isRestrictedBot ? '<span class="chat-restricted-badge">Заблокирован</span>' : ""}</h3>
             <p>${escapeHtml(summary)}</p>
 
             <div class="chat-meta">

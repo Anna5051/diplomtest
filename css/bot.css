@@ -291,6 +291,18 @@ body {
   transform: translateY(1px);
 }
 
+.bot-report-btn {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 170, 190, 0.5);
+  background: rgba(102, 42, 74, 0.5);
+  color: #ffd8e6;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .bot-short-description {
   font-size: 15px;
   line-height: 1.72;
