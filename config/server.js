@@ -158,6 +158,24 @@ function ensurePersonaRoleColumn() {
   });
 }
 
+function ensureUserBlockedColumn() {
+  const sql = `
+    ALTER TABLE users
+    ADD COLUMN is_blocked TINYINT(1) NOT NULL DEFAULT 0 AFTER role_id
+  `;
+
+  db.query(sql, (err) => {
+    if (!err) {
+      console.log("БД: добавлена колонка users.is_blocked");
+      return;
+    }
+    if (err.code === "ER_DUP_FIELDNAME") {
+      return;
+    }
+    console.warn("БД: не удалось проверить/добавить users.is_blocked —", err.message);
+  });
+}
+
 async function getOwnedChat(chatId, userId) {
   const rows = await dbQuery(
     `
@@ -426,13 +444,13 @@ app.post("/login", (req, res) => {
 
     const sql = hasEmailConfirmedColumn
       ? `
-        SELECT id, username, email, password_hash, role_id, avatar_url, created_at, email_confirmed
+        SELECT id, username, email, password_hash, role_id, is_blocked, avatar_url, created_at, email_confirmed
         FROM users
         WHERE email = ?
         LIMIT 1
       `
       : `
-        SELECT id, username, email, password_hash, role_id, avatar_url, created_at
+        SELECT id, username, email, password_hash, role_id, is_blocked, avatar_url, created_at
         FROM users
         WHERE email = ?
         LIMIT 1
@@ -461,6 +479,12 @@ app.post("/login", (req, res) => {
         }
 
         const completeLogin = () => {
+          if (Number(user.is_blocked) === 1) {
+            return res.status(403).json({
+              message: "Ваш аккаунт заблокирован администратором",
+            });
+          }
+
           if (hasEmailConfirmedColumn && Number(user.email_confirmed) !== 1) {
             return res.status(403).json({
               message: "Подтвердите email для входа",
@@ -1702,6 +1726,7 @@ app.get("/admin/users", requireAdmin, (req, res) => {
       username,
       email,
       role_id,
+      is_blocked,
       avatar_url,
       created_at
     FROM users
@@ -1721,20 +1746,18 @@ app.get("/admin/users", requireAdmin, (req, res) => {
 
 app.put("/admin/users/:id", requireAdmin, (req, res) => {
   const { id } = req.params;
-  const { username, email, role_id } = req.body;
+  const { role_id } = req.body;
 
   const sql = `
     UPDATE users
     SET
-      username = ?,
-      email = ?,
       role_id = ?
     WHERE id = ?
   `;
 
   db.query(
     sql,
-    [username || "", email || "", Number(role_id) || 1, id],
+    [Number(role_id) || 1, id],
     (err) => {
       if (err) {
         return res.status(500).json({
@@ -1744,6 +1767,39 @@ app.put("/admin/users/:id", requireAdmin, (req, res) => {
 
       res.json({
         message: "Пользователь обновлён ✅",
+      });
+    },
+  );
+});
+
+app.put("/admin/users/:id/block", requireAdmin, (req, res) => {
+  const { id } = req.params;
+  const shouldBlock = Number(req.body?.is_blocked) === 1 ? 1 : 0;
+
+  if (Number(id) === Number(req.headers["x-user-id"])) {
+    return res.status(400).json({
+      message: "Нельзя изменить блокировку для самого себя",
+    });
+  }
+
+  db.query(
+    `
+      UPDATE users
+      SET is_blocked = ?
+      WHERE id = ?
+    `,
+    [shouldBlock, id],
+    (err) => {
+      if (err) {
+        return res.status(500).json({
+          message: "Ошибка изменения блокировки пользователя",
+        });
+      }
+
+      res.json({
+        message: shouldBlock
+          ? "Пользователь заблокирован ✅"
+          : "Пользователь разблокирован ✅",
       });
     },
   );
@@ -2424,6 +2480,7 @@ function startHttpServer(port) {
       } else {
         console.log("БД: подключение установлено");
         ensurePersonaRoleColumn();
+        ensureUserBlockedColumn();
       }
     });
   });

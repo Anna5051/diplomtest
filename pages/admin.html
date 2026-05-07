@@ -44,7 +44,6 @@
             Пользователи
           </button>
           <button class="sidebar-btn" data-tab="botsTab">Боты</button>
-          <button class="sidebar-btn" data-tab="chatsTab">Чаты</button>
 
           <div class="sidebar-links">
             <a href="/pages/main.html" class="sidebar-link">Открыть главную</a>
@@ -75,13 +74,6 @@
             <p id="botsEmpty" class="empty-state">Нет ботов</p>
           </div>
 
-          <div id="chatsTab" class="admin-tab">
-            <div class="section-head">
-              <h2>Чаты</h2>
-            </div>
-            <div id="chatsList" class="admin-list"></div>
-            <p id="chatsEmpty" class="empty-state">Нет чатов</p>
-          </div>
         </section>
       </div>
     </main>
@@ -118,12 +110,8 @@
       const botsGrid = document.getElementById("botsGrid");
       const botsEmpty = document.getElementById("botsEmpty");
 
-      const chatsList = document.getElementById("chatsList");
-      const chatsEmpty = document.getElementById("chatsEmpty");
-
       let allUsers = [];
       let allBots = [];
-      let allChats = [];
 
       function authHeaders() {
         return {
@@ -166,23 +154,31 @@
         items.forEach((user) => {
           const card = document.createElement("article");
           card.className = "admin-card";
+          const avatarSrc =
+            String(user.avatar_url || "").trim() || "/img/icon.svg";
 
           card.innerHTML = `
           <div class="admin-card-body">
+            <div class="user-head-admin">
+              <img src="${escapeHtml(avatarSrc)}" alt="${escapeHtml(user.username || "user")}" class="user-avatar-admin" />
+              <div class="user-head-meta">
+                <strong>@${escapeHtml(user.username || "unknown")}</strong>
+                <span>${escapeHtml(user.email || "")}</span>
+                <span class="user-status-badge ${Number(user.is_blocked) === 1 ? "blocked" : "active"}">
+                  ${Number(user.is_blocked) === 1 ? "Заблокирован" : "Активен"}
+                </span>
+              </div>
+            </div>
+
             <div class="admin-grid">
               <label>
-                <span>ID</span>
-                <input type="text" value="${escapeHtml(String(user.id))}" disabled>
-              </label>
-
-              <label>
                 <span>Username</span>
-                <input type="text" class="edit-username" value="${escapeHtml(user.username)}">
+                <input type="text" class="edit-username" value="${escapeHtml(user.username)}" readonly disabled>
               </label>
 
               <label>
                 <span>Email</span>
-                <input type="text" class="edit-email" value="${escapeHtml(user.email)}">
+                <input type="text" class="edit-email" value="${escapeHtml(user.email)}" readonly disabled>
               </label>
 
               <label>
@@ -195,7 +191,10 @@
             </div>
 
             <div class="admin-actions">
-              <button class="action-btn primary save-user-btn">Сохранить</button>
+              <button class="action-btn primary save-user-btn">Сохранить роль</button>
+              <button class="action-btn ${Number(user.is_blocked) === 1 ? "warning" : "secondary"} toggle-block-user-btn">
+                ${Number(user.is_blocked) === 1 ? "Разблокировать" : "Заблокировать"}
+              </button>
               <button class="action-btn danger delete-user-btn">Удалить</button>
             </div>
           </div>
@@ -204,10 +203,6 @@
           card
             .querySelector(".save-user-btn")
             .addEventListener("click", async () => {
-              const username = card
-                .querySelector(".edit-username")
-                .value.trim();
-              const email = card.querySelector(".edit-email").value.trim();
               const role_id = Number(card.querySelector(".edit-role-id").value);
 
               try {
@@ -216,7 +211,7 @@
                   {
                     method: "PUT",
                     headers: authHeaders(),
-                    body: JSON.stringify({ username, email, role_id }),
+                    body: JSON.stringify({ role_id }),
                   },
                 );
 
@@ -225,6 +220,41 @@
                 if (res.ok) loadUsers();
               } catch (error) {
                 notifyUser("Ошибка сохранения пользователя", "error");
+              }
+            });
+
+          card
+            .querySelector(".toggle-block-user-btn")
+            .addEventListener("click", async () => {
+              const isBlocked = Number(user.is_blocked) === 1;
+              const shouldProceed = await siteConfirm(
+                isBlocked
+                  ? `Разблокировать пользователя ${user.username}?`
+                  : `Заблокировать пользователя ${user.username}?`,
+                {
+                  title: "Подтверждение",
+                  confirmText: isBlocked ? "Разблокировать" : "Заблокировать",
+                  cancelText: "Отмена",
+                  danger: !isBlocked,
+                },
+              );
+              if (!shouldProceed) return;
+
+              try {
+                const res = await fetch(
+                  `http://localhost:3000/admin/users/${user.id}/block`,
+                  {
+                    method: "PUT",
+                    headers: authHeaders(),
+                    body: JSON.stringify({ is_blocked: isBlocked ? 0 : 1 }),
+                  },
+                );
+
+                const data = await res.json();
+                notifyUser(data.message || "Готово", res.ok ? "success" : "error");
+                if (res.ok) loadUsers();
+              } catch (error) {
+                notifyUser("Ошибка изменения блокировки", "error");
               }
             });
 
@@ -390,92 +420,6 @@
         });
       }
 
-      function renderChats(items) {
-        chatsList.innerHTML = "";
-
-        if (!items.length) {
-          chatsEmpty.style.display = "block";
-          return;
-        }
-
-        chatsEmpty.style.display = "none";
-
-        items.forEach((chat) => {
-          const card = document.createElement("article");
-          card.className = "admin-card";
-
-          card.innerHTML = `
-          <div class="admin-card-body">
-            <div class="admin-grid">
-              <label>
-                <span>ID</span>
-                <input type="text" value="${escapeHtml(String(chat.id))}" disabled>
-              </label>
-
-              <label>
-                <span>User</span>
-                <input type="text" value="${escapeHtml(chat.user_name || "")}" disabled>
-              </label>
-
-              <label>
-                <span>Bot</span>
-                <input type="text" value="${escapeHtml(chat.bot_name || "")}" disabled>
-              </label>
-
-              <label>
-                <span>Title</span>
-                <input type="text" value="${escapeHtml(chat.title || "")}" disabled>
-              </label>
-
-              <label>
-                <span>Visibility</span>
-                <input type="text" value="${escapeHtml(chat.visibility || "")}" disabled>
-              </label>
-
-              <label>
-                <span>Created</span>
-                <input type="text" value="${escapeHtml(chat.created_at || "")}" disabled>
-              </label>
-            </div>
-
-            <div class="admin-actions">
-              <button class="action-btn danger delete-chat-btn">Удалить чат</button>
-            </div>
-          </div>
-        `;
-
-          card
-            .querySelector(".delete-chat-btn")
-            .addEventListener("click", async () => {
-              const shouldDeleteChat = await siteConfirm(`Удалить чат #${chat.id}?`, {
-                title: "Подтверждение удаления",
-                confirmText: "Удалить",
-                cancelText: "Отмена",
-                danger: true,
-              });
-              if (!shouldDeleteChat) return;
-
-              try {
-                const res = await fetch(
-                  `http://localhost:3000/admin/chats/${chat.id}`,
-                  {
-                    method: "DELETE",
-                    headers: authHeaders(),
-                  },
-                );
-
-                const data = await res.json();
-                notifyUser(data.message || "Готово", res.ok ? "success" : "error");
-                if (res.ok) loadChats();
-              } catch (error) {
-                notifyUser("Ошибка удаления чата", "error");
-              }
-            });
-
-          chatsList.appendChild(card);
-        });
-      }
-
       function applyFilters() {
         const q = globalSearch.value.trim().toLowerCase();
 
@@ -497,24 +441,8 @@
               .includes(q),
         );
 
-        const filteredChats = allChats.filter(
-          (item) =>
-            !q ||
-            [
-              item.id,
-              item.user_name,
-              item.bot_name,
-              item.title,
-              item.visibility,
-            ]
-              .join(" ")
-              .toLowerCase()
-              .includes(q),
-        );
-
         renderUsers(filteredUsers);
         renderBots(filteredBots);
-        renderChats(filteredChats);
       }
 
       globalSearch.addEventListener("input", applyFilters);
@@ -551,25 +479,8 @@
         }
       }
 
-      async function loadChats() {
-        try {
-          const res = await fetch("http://localhost:3000/admin/chats", {
-            headers: authHeaders(),
-          });
-
-          const data = await res.json();
-          allChats = Array.isArray(data) ? data : [];
-          applyFilters();
-        } catch (error) {
-          notifyUser("Ошибка загрузки чатов", "error");
-          chatsEmpty.style.display = "block";
-          chatsEmpty.textContent = "Ошибка загрузки чатов";
-        }
-      }
-
       loadUsers();
       loadBots();
-      loadChats();
     </script>
   </body>
 </html>

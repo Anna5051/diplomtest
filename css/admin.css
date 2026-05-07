@@ -123,9 +123,8 @@ body {
 .admin-content {
   border: 1px solid rgba(180, 190, 255, 0.12);
   border-radius: 22px;
-  background: rgba(18, 18, 60, 0.56);
   backdrop-filter: blur(6px);
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 16px 30px rgba(0, 0, 0, 0.18);
 }
 
 .admin-sidebar {
@@ -138,20 +137,28 @@ body {
 
 .sidebar-btn {
   min-height: 46px;
+  padding: 0 14px;
   border-radius: 12px;
-  border: 1px solid rgba(169, 151, 255, 0.28);
-  background: rgba(72, 65, 160, 0.18);
+  border: 1px solid rgba(193, 173, 255, 0.35);
+  background: linear-gradient(180deg, rgba(66, 54, 148, 0.9), rgba(39, 34, 102, 0.92));
   color: #fff;
   cursor: pointer;
   font-size: 14px;
+  font-weight: 700;
+  box-shadow: 0 8px 16px rgba(10, 7, 42, 0.28);
+  transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.sidebar-btn:hover {
+  transform: translateY(-1px);
+  border-color: rgba(225, 211, 255, 0.62);
+  box-shadow: 0 12px 20px rgba(10, 7, 42, 0.34);
 }
 
 .sidebar-btn.active {
-  background: linear-gradient(
-    135deg,
-    rgba(79, 90, 210, 0.62),
-    rgba(132, 74, 214, 0.62)
-  );
+  background: linear-gradient(135deg, rgba(100, 109, 234, 0.95), rgba(151, 94, 236, 0.95));
+  border-color: rgba(234, 223, 255, 0.85);
+  box-shadow: 0 0 18px rgba(161, 115, 255, 0.36);
 }
 
 .sidebar-links {
@@ -191,7 +198,8 @@ body {
 
 .section-head h2 {
   margin: 0;
-  font-size: 28px;
+  font-size: 30px;
+  letter-spacing: -0.01em;
 }
 
 .admin-list {
@@ -203,14 +211,81 @@ body {
 .admin-card {
   border: 1px solid rgba(169, 151, 255, 0.14);
   border-radius: 18px;
-  background: rgba(24, 20, 70, 0.42);
+  background: linear-gradient(180deg, rgba(31, 26, 86, 0.86), rgba(19, 16, 63, 0.82));
   padding: 16px;
+  box-shadow: 0 10px 20px rgba(8, 6, 34, 0.22);
 }
 
 .admin-card-body {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.user-head-admin {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(179, 158, 255, 0.2);
+  background: rgba(37, 30, 96, 0.45);
+}
+
+.user-avatar-admin {
+  width: 54px;
+  height: 54px;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid rgba(220, 206, 255, 0.45);
+  background: rgba(16, 12, 55, 0.72);
+}
+
+.user-head-meta {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.user-head-meta strong {
+  font-size: 17px;
+  font-weight: 800;
+  color: #fff;
+  line-height: 1.2;
+}
+
+.user-head-meta span {
+  font-size: 13px;
+  color: #d9d2ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  width: fit-content;
+}
+
+.user-status-badge.active {
+  border: 1px solid rgba(126, 255, 217, 0.4);
+  background: rgba(39, 126, 104, 0.35);
+  color: #ccffee;
+}
+
+.user-status-badge.blocked {
+  border: 1px solid rgba(255, 164, 164, 0.42);
+  background: rgba(142, 45, 45, 0.34);
+  color: #ffdede;
 }
 
 .admin-grid {
@@ -244,6 +319,21 @@ body {
   background: rgba(16, 12, 55, 0.72);
   color: #fff;
   outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.admin-grid input[readonly],
+.admin-grid input:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
+}
+
+.admin-grid input:focus,
+.admin-grid select:focus,
+.bot-edit-admin input:focus,
+.bot-edit-admin select:focus {
+  border-color: rgba(216, 198, 255, 0.9);
+  box-shadow: 0 0 0 2px rgba(149, 112, 255, 0.2);
 }
 
 .admin-actions {
@@ -260,6 +350,15 @@ body {
   color: #fff;
   cursor: pointer;
   background: rgba(72, 65, 160, 0.18);
+  font-weight: 700;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, filter 0.16s ease;
+}
+
+.action-btn:hover,
+.card-link-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 8px 18px rgba(10, 7, 42, 0.32);
 }
 
 .action-btn.primary {
@@ -272,6 +371,16 @@ body {
 
 .action-btn.danger {
   background: rgba(160, 40, 70, 0.72);
+}
+
+.action-btn.secondary {
+  background: rgba(64, 95, 180, 0.62);
+  border-color: rgba(170, 206, 255, 0.46);
+}
+
+.action-btn.warning {
+  background: rgba(42, 134, 98, 0.62);
+  border-color: rgba(130, 255, 212, 0.46);
 }
 
 .empty-state {
@@ -299,10 +408,11 @@ body {
   overflow: hidden;
   border: 1px solid rgba(169, 151, 255, 0.14);
   border-radius: 18px;
-  background: rgba(24, 20, 70, 0.42);
+  background: linear-gradient(180deg, rgba(31, 26, 86, 0.86), rgba(19, 16, 63, 0.82));
   display: flex;
   flex-direction: column;
   max-width: 100%;
+  box-shadow: 0 10px 22px rgba(8, 6, 34, 0.24);
 }
 
 .bot-image-admin {
