@@ -325,29 +325,26 @@ body.chat-overlay-open .chat-input-wrap {
 }
 
 .message-user .message-stack {
-  /* inline-flex + flex-start: ширина по контенту, не на всю строку чата */
+  /* Ширина по тексту: без absolute-шапки, иначе пузырёк с width:100% раздувается и текст «уезжает» вниз */
   display: inline-flex;
   flex-direction: column;
-  align-items: flex-start;
-  width: auto;
+  align-items: stretch;
+  width: fit-content;
   max-width: min(560px, 92%);
   min-width: 0;
   position: relative;
-  /* шапка absolute — в потоке только пузырёк, ширина карточки = ширина текста (+ гориз. padding) */
-  padding: 36px 12px 10px;
+  padding: 10px 14px 12px;
+  box-sizing: border-box;
 }
 
 .message-user .message-top-row {
-  position: absolute;
-  top: 10px;
-  left: 12px;
-  right: 12px;
+  position: static;
   gap: 4px;
-  width: auto;
-  max-width: none;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  z-index: 2;
+  flex-shrink: 0;
 }
 
 .message-user .message-author {
@@ -543,12 +540,12 @@ body.chat-overlay-open .chat-input-wrap {
 
 .message-user .message-bubble {
   padding: 0;
+  margin: 0;
   margin-inline: 0;
   line-height: 1.45;
   color: #e6e9ed;
   text-align: start;
-  /* не растягивать пузырёк на ширину чата: ширина по контенту, как у шапки */
-  align-self: flex-start;
+  align-self: stretch;
   width: auto;
   max-width: 100%;
   min-width: 0;

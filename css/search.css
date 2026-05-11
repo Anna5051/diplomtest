@@ -526,6 +526,25 @@ body {
   flex-shrink: 0;
 }
 
+button.heart.favorite-heart-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+  font: inherit;
+}
+
+button.heart.favorite-heart-btn:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+button.heart.favorite-heart-btn.active {
+  color: #ff4d9a;
+  filter: drop-shadow(0 0 6px rgba(255, 100, 180, 0.45));
+}
+
 .character-tags {
   display: flex;
   flex-wrap: wrap;

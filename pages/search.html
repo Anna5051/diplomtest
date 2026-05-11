@@ -174,6 +174,8 @@
     const toggleTagsBtn = document.getElementById("toggleTagsBtn");
 
     let allBots = [];
+    const API_BASE_SEARCH = "http://localhost:3000";
+    const favoriteBotIds = new Set();
     let activeTags = new Set();
     let isAllTagsSelected = false;
     let quickFilter = "all";
@@ -343,9 +345,79 @@
       return `favoriteBot_${savedUser.id}_${botId}`;
     }
 
+    async function loadFavoriteBotIds() {
+      favoriteBotIds.clear();
+      if (!savedUser?.id) return;
+      try {
+        const response = await fetch(
+          `${API_BASE_SEARCH}/favorite-bots/${savedUser.id}`,
+        );
+        const data = await response.json();
+        if (response.ok && Array.isArray(data.bot_ids)) {
+          data.bot_ids.forEach((id) => {
+            const n = Number(id);
+            if (Number.isFinite(n) && n > 0) {
+              favoriteBotIds.add(n);
+              localStorage.setItem(getFavoriteBotKey(n), "true");
+            }
+          });
+        }
+      } catch {
+        /* ignore */
+      }
+      const prefix = `favoriteBot_${savedUser.id}_`;
+      Object.keys(localStorage).forEach((k) => {
+        if (!k.startsWith(prefix)) return;
+        if (localStorage.getItem(k) !== "true") return;
+        const rest = k.slice(prefix.length);
+        const n = Number(rest);
+        if (Number.isFinite(n) && n > 0) {
+          favoriteBotIds.add(n);
+        }
+      });
+    }
+
     function isFavoriteBot(botId) {
+      if (!savedUser?.id) return false;
+      return favoriteBotIds.has(Number(botId));
+    }
+
+    async function persistFavoriteSearch(botId, wantFavorite) {
+      if (!savedUser?.id) return false;
+      const bid = Number(botId);
+      const uid = Number(savedUser.id);
       const key = getFavoriteBotKey(botId);
-      return key ? localStorage.getItem(key) === "true" : false;
+      try {
+        if (wantFavorite) {
+          const response = await fetch(`${API_BASE_SEARCH}/favorite-bots`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: uid, bot_id: bid }),
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.message || "Не удалось добавить в избранное");
+          }
+          favoriteBotIds.add(bid);
+        } else {
+          const url = `${API_BASE_SEARCH}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
+          const response = await fetch(url, {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_id: uid, bot_id: bid }),
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data.message || "Не удалось убрать из избранного");
+          }
+          favoriteBotIds.delete(bid);
+        }
+        localStorage.setItem(key, String(wantFavorite));
+        return true;
+      } catch (e) {
+        notifyUser(e.message || "Ошибка избранного", "error");
+        return false;
+      }
     }
 
     function syncActiveTagUI() {
@@ -475,7 +547,13 @@
                   ${escapeHtml(storyDescription || "Сюжет пока не добавлен")}
                 </p>
               </div>
-              <span class="heart">❤</span>
+              <button
+                type="button"
+                class="heart favorite-heart-btn ${isFavoriteBot(bot.id) ? "active" : ""}"
+                data-bot-id="${bot.id}"
+                aria-label="Избранное"
+                ${savedUser?.id ? "" : "disabled"}
+              >❤</button>
             </div>
 
             <div class="character-tags">
@@ -500,6 +578,23 @@
             </div>
           </div>
         `;
+
+        const heartBtn = card.querySelector(".favorite-heart-btn");
+        if (heartBtn && savedUser?.id) {
+          heartBtn.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const id = Number(heartBtn.dataset.botId);
+            if (!Number.isFinite(id) || id < 1) return;
+            const was = favoriteBotIds.has(id);
+            const next = !was;
+            heartBtn.classList.toggle("active", next);
+            const ok = await persistFavoriteSearch(id, next);
+            if (!ok) {
+              heartBtn.classList.toggle("active", was);
+            }
+          });
+        }
 
         charactersGrid.appendChild(card);
       });
@@ -611,7 +706,13 @@
 
     async function loadBots() {
       try {
-        const response = await fetch("http://localhost:3000/all-bots");
+        if (savedUser?.id) {
+          await loadFavoriteBotIds();
+        } else {
+          favoriteBotIds.clear();
+        }
+
+        const response = await fetch(`${API_BASE_SEARCH}/all-bots`);
 
         if (!response.ok) {
           throw new Error("Ошибка загрузки персонажей");

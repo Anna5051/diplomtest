@@ -374,6 +374,78 @@
       /** Пользователь нажал «Общаться без персоны» — следующий клик «Чат с…» ведёт в чат без персоны, а не в модалку */
       let explicitChatWithoutPersona = false;
 
+      const API_BASE_BOT = "http://localhost:3000";
+      const favoriteBotIds = new Set();
+
+      async function loadFavoriteBotIds() {
+        favoriteBotIds.clear();
+        if (!savedUser?.id) return;
+        try {
+          const response = await fetch(
+            `${API_BASE_BOT}/favorite-bots/${savedUser.id}`,
+          );
+          const data = await response.json();
+          if (response.ok && Array.isArray(data.bot_ids)) {
+            data.bot_ids.forEach((id) => {
+              const n = Number(id);
+              if (Number.isFinite(n) && n > 0) {
+                favoriteBotIds.add(n);
+              }
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+        const prefix = `favoriteBot_${savedUser.id}_`;
+        Object.keys(localStorage).forEach((k) => {
+          if (!k.startsWith(prefix)) return;
+          if (localStorage.getItem(k) !== "true") return;
+          const m = k.slice(prefix.length);
+          const n = Number(m);
+          if (Number.isFinite(n) && n > 0) {
+            favoriteBotIds.add(n);
+          }
+        });
+      }
+
+      async function persistFavoriteBotPage(wantFavorite) {
+        if (!savedUser?.id || !botId) return false;
+        const bid = Number(botId);
+        const uid = Number(savedUser.id);
+        const key = getFavoriteKey();
+        if (!key) return false;
+        try {
+          if (wantFavorite) {
+            const response = await fetch(`${API_BASE_BOT}/favorite-bots`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_id: uid, bot_id: bid }),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.message || "Не удалось добавить в избранное");
+            }
+            favoriteBotIds.add(bid);
+          } else {
+            const url = `${API_BASE_BOT}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
+            const response = await fetch(url, {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_id: uid, bot_id: bid }),
+            });
+            const data = await response.json();
+            if (!response.ok) {
+              throw new Error(data.message || "Не удалось убрать из избранного");
+            }
+            favoriteBotIds.delete(bid);
+          }
+          localStorage.setItem(key, String(wantFavorite));
+          return true;
+        } catch (e) {
+          notifyUser(e.message || "Ошибка избранного", "error");
+          return false;
+        }
+      }
 
       const savedTopAvatar =
         localStorage.getItem(`profileAvatar_${savedUser?.id}`) ||
@@ -426,7 +498,8 @@
         const key = getFavoriteKey();
         if (!key) return;
 
-        const active = localStorage.getItem(key) === "true";
+        const active =
+          botId && favoriteBotIds.has(Number(botId));
         favoriteBtn.classList.toggle("active", active);
         favoriteBtn.title = active ? "Удалить из избранного" : "Добавить в избранное";
         favoriteBtn.setAttribute(
@@ -976,13 +1049,40 @@ accordionSystemPrompt.innerHTML =
         window.location.href = `/pages/search.html?q=${encodeURIComponent(query)}`;
       });
 
-      favoriteBtn.addEventListener("click", () => {
+      favoriteBtn.addEventListener("click", async () => {
+        if (!savedUser?.id) {
+          notifyUser("Войдите в аккаунт, чтобы добавлять в избранное", "warning");
+          return;
+        }
         const key = getFavoriteKey();
-        if (!key) return;
+        if (!key || !botId) return;
 
-        const current = localStorage.getItem(key) === "true";
-        localStorage.setItem(key, String(!current));
-        updateFavoriteButton();
+        const bid = Number(botId);
+        const was = favoriteBotIds.has(bid);
+        const next = !was;
+        favoriteBtn.classList.toggle("active", next);
+        favoriteBtn.title = next ? "Удалить из избранного" : "Добавить в избранное";
+        favoriteBtn.setAttribute(
+          "aria-label",
+          next ? "Удалить из избранного" : "Добавить в избранное",
+        );
+        const icon = favoriteBtn.querySelector(".favorite-icon");
+        if (icon) {
+          icon.textContent = next ? "❤" : "♡";
+        }
+
+        const ok = await persistFavoriteBotPage(next);
+        if (!ok) {
+          favoriteBtn.classList.toggle("active", was);
+          favoriteBtn.title = was ? "Удалить из избранного" : "Добавить в избранное";
+          favoriteBtn.setAttribute(
+            "aria-label",
+            was ? "Удалить из избранного" : "Добавить в избранное",
+          );
+          if (icon) {
+            icon.textContent = was ? "❤" : "♡";
+          }
+        }
       });
 
       reportBotBtn.addEventListener("click", async () => {
@@ -1074,6 +1174,7 @@ accordionSystemPrompt.innerHTML =
 
       (async () => {
         await loadPersonas();
+        await loadFavoriteBotIds();
         await loadBot();
         await refreshBotChatActions();
         updateFavoriteButton();

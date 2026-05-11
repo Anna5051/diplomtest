@@ -1,28 +1,78 @@
 /**
  * Шифрование поля messages.content в БД (AES-256-GCM).
  *
- * Задайте в .env:
- *   MESSAGES_CONTENT_KEY — 64 hex-символа (32 байта ключа) ИЛИ любая строка (будет взята SHA-256).
- * Без ключа значения пишутся в БД как раньше (открытый текст).
+ * Ключ (по приоритету):
+ *   1) MESSAGES_CONTENT_KEY в .env — 64 hex-символа (32 байта) ИЛИ любая строка (SHA-256).
+ *   2) Если ключа нет: файл `.messages-content.key` в корне проекта (создаётся автоматически с
+ *      случайным 64 hex) — чтобы на локальной машине (OpenServer и т.п.) в БД не лежал открытый текст.
+ *   3) Явно отключить шифрование: MESSAGES_PLAINTEXT=1 в .env (только для отладки).
  *
- * Уже сохранённые открытые строки при включённом ключе читаются как есть; новые записи шифруются.
+ * Старые открытые строки без префикса CHARITOR_ENC_V1: при чтении возвращаются как есть.
  */
 
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 
 const PREFIX = "CHARITOR_ENC_V1:";
 const ALGO = "aes-256-gcm";
 const IV_LEN = 12;
 const TAG_LEN = 16;
 
+const LOCAL_KEY_FILE = path.resolve(__dirname, "..", ".messages-content.key");
+
+const KEY_CACHE_UNSET = Symbol("messageContentKeyUnset");
+let cachedKeyBuffer = KEY_CACHE_UNSET;
+
 function getKeyBuffer() {
-  const env = process.env.MESSAGES_CONTENT_KEY;
-  if (env == null || String(env).trim() === "") return null;
-  const s = String(env).trim();
-  if (/^[0-9a-fA-F]{64}$/.test(s)) {
-    return Buffer.from(s, "hex");
+  if (cachedKeyBuffer !== KEY_CACHE_UNSET) {
+    return cachedKeyBuffer;
   }
-  return crypto.createHash("sha256").update(s, "utf8").digest();
+
+  if (String(process.env.MESSAGES_PLAINTEXT || "").trim() === "1") {
+    cachedKeyBuffer = null;
+    return null;
+  }
+
+  const env = process.env.MESSAGES_CONTENT_KEY;
+  if (env != null && String(env).trim() !== "") {
+    const s = String(env).trim();
+    cachedKeyBuffer = /^[0-9a-fA-F]{64}$/.test(s)
+      ? Buffer.from(s, "hex")
+      : crypto.createHash("sha256").update(s, "utf8").digest();
+    return cachedKeyBuffer;
+  }
+
+  try {
+    if (fs.existsSync(LOCAL_KEY_FILE)) {
+      const raw = fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim();
+      if (/^[0-9a-fA-F]{64}$/.test(raw)) {
+        cachedKeyBuffer = Buffer.from(raw, "hex");
+        return cachedKeyBuffer;
+      }
+    }
+  } catch (err) {
+    console.warn("messageContentCrypto: не удалось прочитать", LOCAL_KEY_FILE, "—", err.message);
+  }
+
+  try {
+    const hex = crypto.randomBytes(32).toString("hex");
+    fs.writeFileSync(LOCAL_KEY_FILE, `${hex}\n`, { mode: 0o600 });
+    cachedKeyBuffer = Buffer.from(hex, "hex");
+    console.log(
+      "messageContentCrypto: создан локальный ключ шифрования",
+      LOCAL_KEY_FILE,
+      "— новые сообщения в БД будут с префиксом CHARITOR_ENC_V1. Для сервера укажите MESSAGES_CONTENT_KEY в .env.",
+    );
+    return cachedKeyBuffer;
+  } catch (err) {
+    console.warn(
+      "messageContentCrypto: шифрование недоступно (нет MESSAGES_CONTENT_KEY и не удалось создать файл ключа) —",
+      err.message,
+    );
+    cachedKeyBuffer = null;
+    return null;
+  }
 }
 
 function isCiphertext(value) {
@@ -48,7 +98,7 @@ function decryptMessageContentFromDb(stored) {
   const key = getKeyBuffer();
   if (!key) {
     throw new Error(
-      "В БД зашифрованные сообщения (CHARITOR_ENC_V1), но MESSAGES_CONTENT_KEY не задан.",
+      "В БД зашифрованные сообщения (CHARITOR_ENC_V1), но ключ недоступен: задайте MESSAGES_CONTENT_KEY в .env или восстановите файл .messages-content.key в корне проекта.",
     );
   }
 

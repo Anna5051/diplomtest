@@ -278,6 +278,80 @@
       }
 
       let characters = [];
+      const API_BASE_PROFILE = "http://localhost:3000";
+      const favoriteBotIds = new Set();
+
+      function getFavoriteBotKeyProfile(botId) {
+        return `favoriteBot_${savedUser.id}_${botId}`;
+      }
+
+      async function loadFavoriteBotIdsProfile() {
+        favoriteBotIds.clear();
+        if (!savedUser?.id) return;
+        try {
+          const r = await fetch(`${API_BASE_PROFILE}/favorite-bots/${savedUser.id}`);
+          const data = await r.json();
+          if (r.ok && Array.isArray(data.bot_ids)) {
+            data.bot_ids.forEach((id) => {
+              const n = Number(id);
+              if (Number.isFinite(n) && n > 0) {
+                favoriteBotIds.add(n);
+                localStorage.setItem(getFavoriteBotKeyProfile(n), "true");
+              }
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+        const prefix = `favoriteBot_${savedUser.id}_`;
+        Object.keys(localStorage).forEach((k) => {
+          if (!k.startsWith(prefix)) return;
+          if (localStorage.getItem(k) !== "true") return;
+          const rest = k.slice(prefix.length);
+          const n = Number(rest);
+          if (Number.isFinite(n) && n > 0) {
+            favoriteBotIds.add(n);
+          }
+        });
+      }
+
+      async function persistFavoriteProfile(botId, wantFavorite) {
+        const bid = Number(botId);
+        const uid = Number(savedUser.id);
+        const key = getFavoriteBotKeyProfile(botId);
+        try {
+          if (wantFavorite) {
+            const r = await fetch(`${API_BASE_PROFILE}/favorite-bots`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_id: uid, bot_id: bid }),
+            });
+            const data = await r.json();
+            if (!r.ok) {
+              throw new Error(data.message || "Не удалось добавить в избранное");
+            }
+            favoriteBotIds.add(bid);
+          } else {
+            const url = `${API_BASE_PROFILE}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
+            const r = await fetch(url, {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ user_id: uid, bot_id: bid }),
+            });
+            const data = await r.json();
+            if (!r.ok) {
+              throw new Error(data.message || "Не удалось убрать из избранного");
+            }
+            favoriteBotIds.delete(bid);
+          }
+          localStorage.setItem(key, String(wantFavorite));
+          return true;
+        } catch (e) {
+          notifyUser(e.message || "Ошибка избранного", "error");
+          return false;
+        }
+      }
+
       let viewedProfile = {
         id: savedUser.id,
         username: savedUser.username || "unknown",
@@ -682,8 +756,7 @@
         items.forEach((bot) => {
           const card = document.createElement("article");
           card.className = "created-bot-card";
-          const favoriteKey = `favoriteBot_${savedUser.id}_${bot.id}`;
-          const isFavorite = localStorage.getItem(favoriteKey) === "true";
+          const isFavorite = favoriteBotIds.has(Number(bot.id));
 
           const authorId = bot.creator_id || viewedProfile?.id || "";
           const authorName = viewedProfile?.username || "unknown";
@@ -738,15 +811,18 @@
           `;
 
           const favoriteBtn = card.querySelector(".created-bot-favorite");
-          favoriteBtn.addEventListener("click", () => {
+          favoriteBtn.addEventListener("click", async () => {
             if (isRestrictedBot) {
               notifyUser("Бот заблокирован: взаимодействие недоступно", "warning");
               return;
             }
-            const current = localStorage.getItem(favoriteKey) === "true";
-            const next = !current;
-            localStorage.setItem(favoriteKey, String(next));
+            const was = favoriteBotIds.has(Number(bot.id));
+            const next = !was;
             favoriteBtn.classList.toggle("active", next);
+            const ok = await persistFavoriteProfile(bot.id, next);
+            if (!ok) {
+              favoriteBtn.classList.toggle("active", was);
+            }
           });
 
           const appealBtn = card.querySelector(".created-bot-appeal-btn");
@@ -940,6 +1016,7 @@
           }
 
           characters = list;
+          await loadFavoriteBotIdsProfile();
           updateCharacters();
         } catch (error) {
           notifyUser("Ошибка загрузки персонажей", "error");

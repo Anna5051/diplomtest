@@ -1416,6 +1416,20 @@
       return data;
     }
 
+    async function refreshChatMessagesFromServer() {
+      if (!currentChatId) return;
+      const cid = Number(currentChatId);
+      if (!Number.isFinite(cid) || cid < 1) return;
+
+      const response = await fetch(`${API_BASE}/chat/${cid}`);
+      const data = await safeReadJson(response);
+      if (!response.ok) {
+        throw new Error(data.message || "Не удалось обновить список сообщений");
+      }
+      messageRows = Array.isArray(data.messages) ? [...data.messages] : [];
+      rerenderMessages();
+    }
+
     function rerenderMessages() {
       clearMessages();
       if (!messageRows.length) {
@@ -1684,7 +1698,13 @@
       if (!ok) return;
 
       try {
-        const response = await fetch(`${API_BASE}/chat/${currentChatId}/messages`, {
+        const cid = Number(currentChatId);
+        if (!Number.isFinite(cid) || cid < 1) {
+          throw new Error("Некорректный id чата");
+        }
+
+        const deleteUrl = `${API_BASE}/chat/${cid}/messages?user_id=${encodeURIComponent(userId)}`;
+        const response = await fetch(deleteUrl, {
           method: "DELETE",
           headers: {
             "Content-Type": "application/json",
@@ -1700,9 +1720,23 @@
           throw new Error(data.message || "Ошибка очистки чата");
         }
 
-        renderEmpty("Сообщений пока нет");
-        messageRows = [];
-        showToast("Сообщения удалены");
+        try {
+          await refreshChatMessagesFromServer();
+        } catch {
+          messageRows = [];
+          renderEmpty("Сообщений пока нет");
+          showToast("Сообщения удалены");
+          dropdownMenu.classList.remove("open");
+          return;
+        }
+
+        if (messageRows.length > 0) {
+          showToast(
+            "В чате остались сообщения после очистки. Обновите страницу или попробуйте ещё раз.",
+          );
+        } else {
+          showToast("Сообщения удалены");
+        }
         dropdownMenu.classList.remove("open");
       } catch (error) {
         showToast(error.message || "Ошибка очистки чата");

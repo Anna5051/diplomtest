@@ -142,20 +142,88 @@
   let currentSort = "new";
   let myBotsData = [];
   let allBotsData = [];
+  const favoriteBotIds = new Set();
 
   function getFavoriteBotKey(botId) {
     return `favoriteBot_${savedUser.id}_${botId}`;
   }
 
   function isFavoriteBot(botId) {
-    return localStorage.getItem(getFavoriteBotKey(botId)) === "true";
+    return favoriteBotIds.has(Number(botId));
   }
 
-  function toggleFavoriteBot(botId) {
+  async function loadFavoriteBotIds() {
+    favoriteBotIds.clear();
+    try {
+      const response = await fetch(`${API_BASE}/favorite-bots/${savedUser.id}`);
+      const data = await response.json();
+      if (!response.ok) {
+        return;
+      }
+      if (Array.isArray(data.bot_ids)) {
+        data.bot_ids.forEach((id) => {
+          const n = Number(id);
+          if (Number.isFinite(n) && n > 0) {
+            favoriteBotIds.add(n);
+            localStorage.setItem(getFavoriteBotKey(n), "true");
+          }
+        });
+      }
+    } catch {
+      /* сеть / сервер — остаётся только localStorage ниже */
+    }
+    /* Подтянуть локальные отметки, если API ещё пустой (миграция со старого UI) */
+    const mergeKeys = Object.keys(localStorage).filter((k) =>
+      k.startsWith(`favoriteBot_${savedUser.id}_`),
+    );
+    mergeKeys.forEach((k) => {
+      if (localStorage.getItem(k) === "true") {
+        const m = k.match(/^favoriteBot_\d+_(.+)$/);
+        if (m) {
+          const n = Number(m[1]);
+          if (Number.isFinite(n) && n > 0) {
+            favoriteBotIds.add(n);
+          }
+        }
+      }
+    });
+  }
+
+  async function persistFavoriteBot(botId, wantFavorite) {
+    const bid = Number(botId);
+    const uid = Number(savedUser.id);
     const key = getFavoriteBotKey(botId);
-    const current = localStorage.getItem(key) === "true";
-    localStorage.setItem(key, String(!current));
-    return !current;
+    try {
+      if (wantFavorite) {
+        const response = await fetch(`${API_BASE}/favorite-bots`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: uid, bot_id: bid }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || "Не удалось добавить в избранное");
+        }
+        favoriteBotIds.add(bid);
+      } else {
+        const url = `${API_BASE}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
+        const response = await fetch(url, {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: uid, bot_id: bid }),
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || "Не удалось убрать из избранного");
+        }
+        favoriteBotIds.delete(bid);
+      }
+      localStorage.setItem(key, String(wantFavorite));
+      return true;
+    } catch (e) {
+      notifyUser(e.message || "Ошибка избранного", "error");
+      return false;
+    }
   }
 
   function escapeHtml(text) {
@@ -419,16 +487,26 @@ function renderBots(items) {
 
     const favoriteBtn = card.querySelector(".favorite-btn");
 
-    favoriteBtn.addEventListener("click", () => {
+    favoriteBtn.addEventListener("click", async () => {
       if (isRestrictedBot) {
         notifyUser("Бот заблокирован: взаимодействие недоступно", "warning");
         return;
       }
-      const next = toggleFavoriteBot(bot.id);
+      const was = favoriteBotIds.has(Number(bot.id));
+      const next = !was;
       favoriteBtn.classList.toggle("active", next);
       favoriteBtn.title = next
         ? "Удалить из избранного"
         : "Добавить в избранное";
+
+      const ok = await persistFavoriteBot(bot.id, next);
+      if (!ok) {
+        favoriteBtn.classList.toggle("active", was);
+        favoriteBtn.title = was
+          ? "Удалить из избранного"
+          : "Добавить в избранное";
+        return;
+      }
 
       if (currentTab === "favorites") {
         applySearch();
@@ -670,6 +748,7 @@ function renderBots(items) {
 
   (async () => {
     await loadMyChats();
+    await loadFavoriteBotIds();
     await loadMyBots();
     await loadAllBots();
     const tab = new URLSearchParams(window.location.search).get("tab");

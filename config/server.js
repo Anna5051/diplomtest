@@ -147,6 +147,70 @@ function dbQuery(sql, params = []) {
   });
 }
 
+/**
+ * Если в чате нет сообщений и у бота задано greeting_message — вставляет первое сообщение от бота.
+ * Нужно после «очистить чат» и при открытии пустого чата, чтобы приветствие автора не терялось.
+ */
+function seedBotGreetingIfChatHasNoMessages(chatId, callback) {
+  const cid = parseInt(String(chatId), 10);
+  if (!Number.isFinite(cid) || cid < 1) {
+    return process.nextTick(() => callback(null));
+  }
+
+  db.query(
+    `SELECT COUNT(*) AS cnt FROM messages WHERE chat_id = ?`,
+    [cid],
+    (cntErr, cntRows) => {
+      if (cntErr) {
+        return callback(cntErr);
+      }
+      const cnt = Number(cntRows[0]?.cnt) || 0;
+      if (cnt > 0) {
+        return callback(null);
+      }
+
+      db.query(
+        `
+          SELECT TRIM(COALESCE(b.greeting_message, '')) AS greeting
+          FROM chats c
+          INNER JOIN bots b ON b.id = c.bot_id
+          WHERE c.id = ?
+          LIMIT 1
+        `,
+        [cid],
+        (grErr, grRows) => {
+          if (grErr) {
+            return callback(grErr);
+          }
+          const greeting = String(grRows[0]?.greeting || "").trim();
+          if (!greeting) {
+            return callback(null);
+          }
+
+          const insertSql = `
+            INSERT INTO messages (chat_id, sender_type, content, created_at)
+            VALUES (?, 'bot', ?, NOW())
+          `;
+          db.query(
+            insertSql,
+            [cid, encryptMessageContentForDb(greeting)],
+            (insErr) => {
+              if (insErr) {
+                return callback(insErr);
+              }
+              db.query(
+                "UPDATE chats SET updated_at = NOW() WHERE id = ?",
+                [cid],
+                () => callback(null),
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+}
+
 function ensurePersonaRoleColumn() {
   const sql = `
     ALTER TABLE personas
@@ -234,6 +298,31 @@ function ensureMessagesPolicyViolationColumn() {
       return;
     }
     console.warn("БД: не удалось проверить/добавить messages.policy_violation —", err.message);
+  });
+}
+
+/** Один ряд на пару (user_id, bot_id) — без этого возможны дубликаты в избранном. */
+function ensureFavoritesBotsUserBotIndex() {
+  const sql = `
+    ALTER TABLE favorites_bots
+    ADD UNIQUE INDEX idx_favorites_user_bot (user_id, bot_id)
+  `;
+
+  db.query(sql, (err) => {
+    if (!err) {
+      console.log("БД: уникальный индекс favorites_bots(user_id, bot_id)");
+      return;
+    }
+    if (err.code === "ER_DUP_KEYNAME") {
+      return;
+    }
+    if (String(err.message || "").includes("Duplicate key name")) {
+      return;
+    }
+    console.warn(
+      "БД: не удалось добавить уникальный индекс favorites_bots —",
+      err.message,
+    );
   });
 }
 
@@ -1258,10 +1347,38 @@ app.get("/chat-by-bot/:botId", (req, res) => {
         ORDER BY created_at ASC, id ASC
       `;
 
+      const respondWithMessages = () => {
+        db.query(messagesSql, [chat.id], (msgErr2, msgRows2) => {
+          if (msgErr2) {
+            return res.status(500).json({
+              message: "Ошибка загрузки сообщений",
+            });
+          }
+
+          res.json({
+            chat,
+            bot,
+            messages: decryptMessageRowsForApi(msgRows2),
+          });
+        });
+      };
+
       db.query(messagesSql, [chat.id], (msgErr, msgRows) => {
         if (msgErr) {
           return res.status(500).json({
             message: "Ошибка загрузки сообщений",
+          });
+        }
+
+        if (!msgRows.length) {
+          return seedBotGreetingIfChatHasNoMessages(chat.id, (seedErr) => {
+            if (seedErr) {
+              console.warn(
+                "Не удалось подставить приветствие в пустой чат —",
+                seedErr.message,
+              );
+            }
+            return respondWithMessages();
           });
         }
 
@@ -1501,10 +1618,43 @@ app.get("/chat/:chatId", (req, res) => {
       ORDER BY created_at ASC, id ASC
     `;
 
+    const respondChatByIdMessages = () => {
+      db.query(messagesSql, [chatId], (msgErr2, msgRows2) => {
+        if (msgErr2) {
+          return res.status(500).json({
+            message: "Ошибка загрузки сообщений",
+          });
+        }
+
+        res.json({
+          chat,
+          bot: {
+            id: chat.bot_id,
+            name: chat.bot_name,
+            avatar_url: chat.avatar_url,
+            greeting_message: chat.greeting_message,
+          },
+          messages: decryptMessageRowsForApi(msgRows2),
+        });
+      });
+    };
+
     db.query(messagesSql, [chatId], (msgErr, msgRows) => {
       if (msgErr) {
         return res.status(500).json({
           message: "Ошибка загрузки сообщений",
+        });
+      }
+
+      if (!msgRows.length) {
+        return seedBotGreetingIfChatHasNoMessages(chatId, (seedErr) => {
+          if (seedErr) {
+            console.warn(
+              "Не удалось подставить приветствие в пустой чат —",
+              seedErr.message,
+            );
+          }
+          return respondChatByIdMessages();
         });
       }
 
@@ -2054,6 +2204,113 @@ app.get("/my-chats/:userId", (req, res) => {
 
     res.json(rows);
   });
+});
+
+/* Избранные боты (таблица favorites_bots) */
+app.get("/favorite-bots/:userId", (req, res) => {
+  const userId = parseInt(String(req.params.userId), 10);
+  if (!Number.isFinite(userId) || userId < 1) {
+    return res.status(400).json({ message: "Некорректный user id" });
+  }
+
+  const sql = `
+    SELECT DISTINCT bot_id
+    FROM favorites_bots
+    WHERE user_id = ?
+    ORDER BY bot_id ASC
+  `;
+
+  db.query(sql, [userId], (err, rows) => {
+    if (err) {
+      console.error("favorite-bots GET:", err);
+      return res.status(500).json({ message: "Ошибка загрузки избранного" });
+    }
+
+    const bot_ids = (rows || [])
+      .map((r) => Number(r.bot_id))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    res.json({ bot_ids });
+  });
+});
+
+app.post("/favorite-bots", (req, res) => {
+  const user_id = parseInt(String(req.body?.user_id), 10);
+  const bot_id = parseInt(String(req.body?.bot_id), 10);
+
+  if (!Number.isFinite(user_id) || user_id < 1) {
+    return res.status(400).json({ message: "Некорректный user_id" });
+  }
+  if (!Number.isFinite(bot_id) || bot_id < 1) {
+    return res.status(400).json({ message: "Некорректный bot_id" });
+  }
+
+  db.query("SELECT id FROM bots WHERE id = ? LIMIT 1", [bot_id], (botErr, botRows) => {
+    if (botErr) {
+      console.error("favorite-bots POST bot check:", botErr);
+      return res.status(500).json({ message: "Ошибка проверки бота" });
+    }
+    if (!botRows.length) {
+      return res.status(404).json({ message: "Бот не найден" });
+    }
+
+    const insertSql = `
+      INSERT INTO favorites_bots (user_id, bot_id, created_at)
+      VALUES (?, ?, NOW())
+    `;
+
+    db.query(insertSql, [user_id, bot_id], (insErr) => {
+      if (insErr) {
+        if (insErr.code === "ER_DUP_ENTRY" || Number(insErr.errno) === 1062) {
+          return res.json({ message: "Уже в избранном", already: true, bot_id });
+        }
+        console.error("favorite-bots POST:", insErr);
+        return res.status(500).json({ message: "Ошибка добавления в избранное" });
+      }
+
+      res.json({ message: "Добавлено в избранное ✅", bot_id });
+    });
+  });
+});
+
+app.delete("/favorite-bots", (req, res) => {
+  const body = req.body || {};
+  const q = req.query || {};
+  const user_id = parseInt(
+    String(
+      body.user_id != null && String(body.user_id).trim() !== ""
+        ? body.user_id
+        : q.user_id,
+    ),
+    10,
+  );
+  const bot_id = parseInt(
+    String(
+      body.bot_id != null && String(body.bot_id).trim() !== ""
+        ? body.bot_id
+        : q.bot_id,
+    ),
+    10,
+  );
+
+  if (!Number.isFinite(user_id) || user_id < 1) {
+    return res.status(400).json({ message: "Некорректный user_id" });
+  }
+  if (!Number.isFinite(bot_id) || bot_id < 1) {
+    return res.status(400).json({ message: "Некорректный bot_id" });
+  }
+
+  db.query(
+    "DELETE FROM favorites_bots WHERE user_id = ? AND bot_id = ?",
+    [user_id, bot_id],
+    (delErr) => {
+      if (delErr) {
+        console.error("favorite-bots DELETE:", delErr);
+        return res.status(500).json({ message: "Ошибка удаления из избранного" });
+      }
+
+      res.json({ message: "Удалено из избранного ✅", bot_id });
+    },
+  );
 });
 
 /* Жалобы пользователей */
@@ -2877,9 +3134,19 @@ app.delete("/persona/:id", (req, res) => {
 /* удалить сообщения чата */
 app.delete("/chat/:chatId/messages", (req, res) => {
   const { chatId } = req.params;
-  const { user_id } = req.body;
+  const body = req.body || {};
+  const q = req.query || {};
+  const user_id =
+    body.user_id != null && String(body.user_id).trim() !== ""
+      ? body.user_id
+      : q.user_id;
 
-  if (!user_id) {
+  const cid = parseInt(String(chatId), 10);
+  if (!Number.isFinite(cid) || cid < 1) {
+    return res.status(400).json({ message: "Некорректный id чата" });
+  }
+
+  if (user_id == null || String(user_id).trim() === "") {
     return res.status(400).json({ message: "Не указан пользователь" });
   }
 
@@ -2890,7 +3157,7 @@ app.delete("/chat/:chatId/messages", (req, res) => {
     LIMIT 1
   `;
 
-  db.query(checkSql, [chatId], (err, rows) => {
+  db.query(checkSql, [cid], (err, rows) => {
     if (err) {
       return res.status(500).json({ message: "Ошибка проверки чата" });
     }
@@ -2903,18 +3170,27 @@ app.delete("/chat/:chatId/messages", (req, res) => {
       return res.status(403).json({ message: "Нет доступа к этому чату" });
     }
 
-    db.query("DELETE FROM messages WHERE chat_id = ?", [chatId], (deleteErr) => {
+    db.query("DELETE FROM messages WHERE chat_id = ?", [cid], (deleteErr, deleteResult) => {
       if (deleteErr) {
         return res.status(500).json({ message: "Ошибка удаления сообщений" });
       }
 
-      db.query(
-        "UPDATE chats SET updated_at = NOW() WHERE id = ?",
-        [chatId],
-        () => {
-          res.json({ message: "Сообщения удалены ✅" });
+      const deletedCount = Number(deleteResult?.affectedRows) || 0;
+
+      seedBotGreetingIfChatHasNoMessages(cid, (seedErr) => {
+        if (seedErr) {
+          console.warn(
+            "После очистки чата не удалось восстановить приветствие —",
+            seedErr.message,
+          );
         }
-      );
+        db.query("UPDATE chats SET updated_at = NOW() WHERE id = ?", [cid], () => {
+          res.json({
+            message: "Сообщения удалены ✅",
+            deleted_count: deletedCount,
+          });
+        });
+      });
     });
   });
 });
@@ -2996,6 +3272,7 @@ function startHttpServer(port) {
         ensureBotBlockedColumn();
         ensureBotDeletedColumn();
         ensureMessagesPolicyViolationColumn();
+        ensureFavoritesBotsUserBotIndex();
         ensureReportsTable();
       }
     });
