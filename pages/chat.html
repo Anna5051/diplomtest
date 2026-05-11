@@ -520,6 +520,24 @@
       }, 2200);
     }
 
+    const CHARITOR_FILTERED_BOT_PLACEHOLDER = "__CHARITOR_MSG_FILTERED__";
+
+    function isPolicyFilteredBotMessage(message) {
+      if (!message || message.sender_type !== "bot") return false;
+      return String(message.content || "").trim() === CHARITOR_FILTERED_BOT_PLACEHOLDER;
+    }
+
+    function buildContentFilterCardHtml() {
+      return `
+        <div class="content-filter-notice" role="alert">
+          <div class="content-filter-notice__icon" aria-hidden="true">😐</div>
+          <p class="content-filter-notice__title">Этот контент отфильтрован. Убедитесь, что ваши чаты соответствуют нашим Условиям и Правилам сообщества.</p>
+          <p class="content-filter-notice__hint">Чтобы продолжить беседу, отправьте другое сообщение.</p>
+          <p class="content-filter-notice__action-hint">Перегенерируйте ответ кнопками ↻ или › под этим блоком либо перепишите свою реплику (✎ у вашего сообщения).</p>
+        </div>
+      `;
+    }
+
     function showChatConfirm(message, options = {}) {
       const confirmLabel = options.confirmLabel || "Удалить";
       return new Promise((resolve) => {
@@ -865,14 +883,14 @@
         headerActions.innerHTML = buildMessageHeaderActions(target);
       }
       const bubble = row.querySelector(".message-bubble");
-      if (!bubble) return;
-      bubble.classList.remove("message-bubble--editing");
-      bubble.textContent = normalizeChatMessageText(target.content || "");
+      if (bubble) bubble.classList.remove("message-bubble--editing");
+      rerenderMessages();
     }
 
     function beginMessageEdit(messageId) {
       const target = messageRows.find((item) => Number(item.id) === messageId);
       if (!target) return;
+      if (isPolicyFilteredBotMessage(target)) return;
       if (editingMessageId === messageId) return;
 
       if (editingMessageId !== null && editingMessageId !== messageId) {
@@ -963,15 +981,7 @@
         editingMessageId = null;
         const stack = row.querySelector(".message-stack");
         if (stack) stack.classList.remove("message-stack--editing");
-        const headerActions = row.querySelector(".message-card-header-actions");
-        if (headerActions) {
-          headerActions.innerHTML = buildMessageHeaderActions(data.updated);
-        }
-        const bubble = row.querySelector(".message-bubble");
-        if (bubble) {
-          bubble.classList.remove("message-bubble--editing");
-          bubble.textContent = trimmed;
-        }
+        rerenderMessages();
         showToast("Сообщение обновлено");
       } catch (error) {
         showToast(error.message || "Ошибка редактирования");
@@ -980,6 +990,7 @@
 
     function buildMessageHeaderActions(message) {
       if (!message?.id) return "";
+      if (isPolicyFilteredBotMessage(message)) return "";
       return `
         <button
           type="button"
@@ -1031,6 +1042,7 @@
     function renderMessage(message, options = {}) {
       const type = message.sender_type === "user" ? "user" : "bot";
       const isLoadingUi = Boolean(options.loading || message._loading);
+      const isFilterNotice = type === "bot" && isPolicyFilteredBotMessage(message);
 
       const row = document.createElement("div");
       row.className = type === "user"
@@ -1059,8 +1071,8 @@
               ${!isLoadingUi ? buildMessageHeaderActions(message) : ""}
             </div>
           </div>
-          <div class="message-bubble ${isLoadingUi ? "loading" : ""}">
-            ${isLoadingUi ? buildTypingDotsHtml() : escapeHtml(normalizeChatMessageText(message.content))}
+          <div class="message-bubble ${isLoadingUi ? "loading" : ""}${isFilterNotice ? " message-bubble--filter-notice" : ""}">
+            ${isLoadingUi ? buildTypingDotsHtml() : isFilterNotice ? buildContentFilterCardHtml() : escapeHtml(normalizeChatMessageText(message.content))}
           </div>
           ${!isLoadingUi ? buildMessageFooterActions(message) : ""}
         </div>
@@ -1148,6 +1160,22 @@
           });
         } else {
           renderEmpty("Начните диалог первым сообщением");
+        }
+
+        // Иначе при каждом F5 с ?new=1 сервер снова создаёт пустой чат и удаляет старый.
+        try {
+          const u = new URL(window.location.href);
+          if (u.searchParams.get("new") === "1") {
+            u.searchParams.delete("new");
+            const qs = u.searchParams.toString();
+            history.replaceState(
+              null,
+              "",
+              qs ? `${u.pathname}?${qs}${u.hash}` : `${u.pathname}${u.hash}`,
+            );
+          }
+        } catch {
+          /* ignore */
         }
       } catch (error) {
         renderEmpty(error.message || "Ошибка загрузки чата");
@@ -1311,6 +1339,13 @@
           messageRows.push(data.reply);
         }
         rerenderMessages();
+        if (data.reply && isPolicyFilteredBotMessage(data.reply)) {
+          showToast("Сообщение отфильтровано по правилам площадки");
+          requestAnimationFrame(() => {
+            const row = findMessageRow(Number(data.reply.id));
+            row?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+          });
+        }
       } catch (error) {
         loadingMessage.remove();
         const optimisticUserRow = messagesBox.lastElementChild;

@@ -116,6 +116,8 @@ const {
   mapMessagesToOllamaHistory,
   generateBotReply,
   buildBotReplyFromHistory,
+  classifyUserPolicyViolation,
+  FILTERED_BOT_MESSAGE_PLACEHOLDER,
 } = require("./aiChat");
 let hasEmailConfirmedColumnCache = null;
 
@@ -209,6 +211,24 @@ function ensureBotDeletedColumn() {
       return;
     }
     console.warn("БД: не удалось проверить/добавить bots.is_deleted —", err.message);
+  });
+}
+
+function ensureMessagesPolicyViolationColumn() {
+  const sql = `
+    ALTER TABLE messages
+    ADD COLUMN policy_violation TINYINT(1) NOT NULL DEFAULT 0 AFTER content
+  `;
+
+  db.query(sql, (err) => {
+    if (!err) {
+      console.log("БД: добавлена колонка messages.policy_violation");
+      return;
+    }
+    if (err.code === "ER_DUP_FIELDNAME") {
+      return;
+    }
+    console.warn("БД: не удалось проверить/добавить messages.policy_violation —", err.message);
   });
 }
 
@@ -1226,6 +1246,7 @@ app.get("/chat-by-bot/:botId", (req, res) => {
           chat_id,
           sender_type,
           content,
+          COALESCE(policy_violation, 0) AS policy_violation,
           created_at
         FROM messages
         WHERE chat_id = ?
@@ -1468,6 +1489,7 @@ app.get("/chat/:chatId", (req, res) => {
         chat_id,
         sender_type,
         content,
+        COALESCE(policy_violation, 0) AS policy_violation,
         created_at
       FROM messages
       WHERE chat_id = ?
@@ -1540,6 +1562,8 @@ app.post("/chat/:chatId/message", (req, res) => {
     }
 
     const chat = chatRows[0];
+    const policyHit = classifyUserPolicyViolation(normalizedText);
+    const policyViolationFlag = policyHit ? 1 : 0;
 
     const saveUserMessageSql = `
       INSERT INTO messages
@@ -1547,98 +1571,147 @@ app.post("/chat/:chatId/message", (req, res) => {
         chat_id,
         sender_type,
         content,
+        policy_violation,
         created_at
       )
-      VALUES (?, 'user', ?, NOW())
+      VALUES (?, 'user', ?, ?, NOW())
     `;
 
-    db.query(saveUserMessageSql, [chatId, normalizedText], (saveUserErr, saveUserResult) => {
-      if (saveUserErr) {
-        return res.status(500).json({
-          message: "Ошибка сохранения сообщения пользователя",
-        });
-      }
-
-      const historySql = `
-        SELECT
-          sender_type,
-          content
-        FROM messages
-        WHERE chat_id = ?
-        ORDER BY created_at DESC, id DESC
-        LIMIT ?
-      `;
-
-      db.query(historySql, [chatId, CHAT_HISTORY_LIMIT], async (historyErr, historyRows) => {
-        if (historyErr) {
+    db.query(
+      saveUserMessageSql,
+      [chatId, normalizedText, policyViolationFlag],
+      (saveUserErr, saveUserResult) => {
+        if (saveUserErr) {
           return res.status(500).json({
-            message: "Ошибка подготовки контекста чата",
+            message: "Ошибка сохранения сообщения пользователя",
           });
         }
 
-        let botReply = "";
-        try {
-          botReply = await generateBotReply({
-            botName: chat.bot_name,
-            botSystemPrompt: chat.bot_system_prompt,
-            personaPrompt: String(persona_prompt || ""),
-            personaName: String(persona_name || ""),
-            history: mapMessagesToOllamaHistory(historyRows),
-            runtimeConfig,
+        const updateChatTimestamp = (callback) => {
+          db.query("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId], () => {
+            callback();
           });
-        } catch (modelErr) {
-          return res.status(500).json({
-            message: `Не удалось получить ответ от модели: ${String(modelErr?.message || "неизвестная ошибка")}`,
-          });
+        };
+
+        if (policyHit) {
+          const saveFilteredBotSql = `
+            INSERT INTO messages
+            (
+              chat_id,
+              sender_type,
+              content,
+              created_at
+            )
+            VALUES (?, 'bot', ?, NOW())
+          `;
+
+          return db.query(
+            saveFilteredBotSql,
+            [chatId, FILTERED_BOT_MESSAGE_PLACEHOLDER],
+            (saveBotErr, saveBotResult) => {
+              if (saveBotErr) {
+                return res.status(500).json({
+                  message: "Ошибка сохранения ответа фильтра",
+                });
+              }
+
+              return updateChatTimestamp(() => {
+                res.json({
+                  message: "Контент отфильтрован по правилам площадки",
+                  content_filtered: true,
+                  filter_reason: policyHit.kind,
+                  user_message: {
+                    id: saveUserResult.insertId,
+                    chat_id: Number(chatId),
+                    sender_type: "user",
+                    content: normalizedText,
+                    policy_violation: 1,
+                  },
+                  reply: {
+                    id: saveBotResult.insertId,
+                    chat_id: Number(chatId),
+                    sender_type: "bot",
+                    content: FILTERED_BOT_MESSAGE_PLACEHOLDER,
+                  },
+                });
+              });
+            },
+          );
         }
 
-        const saveBotMessageSql = `
-          INSERT INTO messages
-          (
-            chat_id,
+        const historySql = `
+          SELECT
             sender_type,
             content,
-            created_at
-          )
-          VALUES (?, 'bot', ?, NOW())
+            COALESCE(policy_violation, 0) AS policy_violation
+          FROM messages
+          WHERE chat_id = ?
+          ORDER BY created_at DESC, id DESC
+          LIMIT ?
         `;
 
-        db.query(saveBotMessageSql, [chatId, botReply], (saveBotErr, saveBotResult) => {
-          if (saveBotErr) {
+        db.query(historySql, [chatId, CHAT_HISTORY_LIMIT], async (historyErr, historyRows) => {
+          if (historyErr) {
             return res.status(500).json({
-              message: "Ошибка сохранения ответа бота",
+              message: "Ошибка подготовки контекста чата",
             });
           }
 
-          const updateChatSql = `
-            UPDATE chats
-            SET updated_at = NOW()
-            WHERE id = ?
+          let botReply = "";
+          try {
+            botReply = await generateBotReply({
+              botName: chat.bot_name,
+              botSystemPrompt: chat.bot_system_prompt,
+              personaPrompt: String(persona_prompt || ""),
+              personaName: String(persona_name || ""),
+              history: mapMessagesToOllamaHistory(historyRows),
+              runtimeConfig,
+            });
+          } catch (modelErr) {
+            return res.status(500).json({
+              message: `Не удалось получить ответ от модели: ${String(modelErr?.message || "неизвестная ошибка")}`,
+            });
+          }
+
+          const saveBotMessageSql = `
+            INSERT INTO messages
+            (
+              chat_id,
+              sender_type,
+              content,
+              created_at
+            )
+            VALUES (?, 'bot', ?, NOW())
           `;
 
-          db.query(updateChatSql, [chatId], (updateErr) => {
-            if (updateErr) {
+          db.query(saveBotMessageSql, [chatId, botReply], (saveBotErr, saveBotResult) => {
+            if (saveBotErr) {
+              return res.status(500).json({
+                message: "Ошибка сохранения ответа бота",
+              });
             }
 
-            res.json({
-              message: "Сообщение отправлено ✅",
-              user_message: {
-                id: saveUserResult.insertId,
-                chat_id: Number(chatId),
-                sender_type: "user",
-                content: normalizedText,
-              },
-              reply: {
-                id: saveBotResult.insertId,
-                chat_id: Number(chatId),
-                sender_type: "bot",
-                content: botReply,
-              },
+            updateChatTimestamp(() => {
+              res.json({
+                message: "Сообщение отправлено ✅",
+                user_message: {
+                  id: saveUserResult.insertId,
+                  chat_id: Number(chatId),
+                  sender_type: "user",
+                  content: normalizedText,
+                  policy_violation: 0,
+                },
+                reply: {
+                  id: saveBotResult.insertId,
+                  chat_id: Number(chatId),
+                  sender_type: "bot",
+                  content: botReply,
+                },
+              });
             });
           });
         });
       });
-    });
   });
 });
 
@@ -1659,6 +1732,8 @@ app.put("/chat/:chatId/message/:messageId", async (req, res) => {
     });
   }
 
+  const policyHit = classifyUserPolicyViolation(normalizedText);
+
   try {
     const ownedChat = await getOwnedChat(chatId, user_id);
     if (!ownedChat) return res.status(404).json({ message: "Чат не найден" });
@@ -1668,7 +1743,7 @@ app.put("/chat/:chatId/message/:messageId", async (req, res) => {
 
     const messageRows = await dbQuery(
       `
-        SELECT id, chat_id, sender_type
+        SELECT id, chat_id, sender_type, content
         FROM messages
         WHERE id = ? AND chat_id = ?
         LIMIT 1
@@ -1679,14 +1754,41 @@ app.put("/chat/:chatId/message/:messageId", async (req, res) => {
       return res.status(404).json({ message: "Сообщение не найдено" });
     }
 
-    await dbQuery(
-      `
-        UPDATE messages
-        SET content = ?
-        WHERE id = ? AND chat_id = ?
-      `,
-      [normalizedText, messageId, chatId],
-    );
+    if (
+      messageRows[0].sender_type === "bot" &&
+      String(messageRows[0].content || "").trim() === FILTERED_BOT_MESSAGE_PLACEHOLDER
+    ) {
+      return res.status(400).json({
+        message: "Сообщение фильтра контента нельзя редактировать",
+      });
+    }
+
+    if (messageRows[0].sender_type === "user" && policyHit) {
+      return res.status(400).json({
+        message:
+          "Текст не проходит правила площадки (18+, жестокость или нецензурная лексика). Измените формулировку.",
+      });
+    }
+
+    if (messageRows[0].sender_type === "user") {
+      await dbQuery(
+        `
+          UPDATE messages
+          SET content = ?, policy_violation = 0
+          WHERE id = ? AND chat_id = ?
+        `,
+        [normalizedText, messageId, chatId],
+      );
+    } else {
+      await dbQuery(
+        `
+          UPDATE messages
+          SET content = ?
+          WHERE id = ? AND chat_id = ?
+        `,
+        [normalizedText, messageId, chatId],
+      );
+    }
     await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
 
     return res.json({
@@ -1696,6 +1798,7 @@ app.put("/chat/:chatId/message/:messageId", async (req, res) => {
         chat_id: Number(chatId),
         sender_type: messageRows[0].sender_type,
         content: normalizedText,
+        ...(messageRows[0].sender_type === "user" ? { policy_violation: 0 } : {}),
       },
     });
   } catch (error) {
@@ -1751,7 +1854,7 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
 
     const targetRows = await dbQuery(
       `
-        SELECT id, sender_type
+        SELECT id, sender_type, content
         FROM messages
         WHERE id = ? AND chat_id = ?
         LIMIT 1
@@ -2847,6 +2950,7 @@ function startHttpServer(port) {
         ensureUserBlockedColumn();
         ensureBotBlockedColumn();
         ensureBotDeletedColumn();
+        ensureMessagesPolicyViolationColumn();
         ensureReportsTable();
       }
     });

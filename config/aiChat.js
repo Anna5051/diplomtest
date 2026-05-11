@@ -14,6 +14,14 @@ const OLLAMA_TEMPERATURE = Number(process.env.OLLAMA_TEMPERATURE) || 0.55;
 const OLLAMA_TOP_P = Number(process.env.OLLAMA_TOP_P) || 0.85;
 const OLLAMA_REPEAT_PENALTY = Number(process.env.OLLAMA_REPEAT_PENALTY) || 1.12;
 
+/** Маркер ответа бота при срабатывании фильтра (отображается карточкой в UI, в LLM не передаётся). */
+const FILTERED_BOT_MESSAGE_PLACEHOLDER = "__CHARITOR_MSG_FILTERED__";
+
+/** Границы «слова» для кириллицы (стандартный \\b в JS не работает с русскими буквами). */
+function policyWordSurroundedPattern(coreSource) {
+  return new RegExp(`(?<![0-9A-Za-zА-Яа-яЁё])(?:${coreSource})(?![0-9A-Za-zА-Яа-яЁё])`, "iu");
+}
+
 function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
   const rawSystemPrompt = String(botSystemPrompt || "");
   const promptMetadata = extractPromptMetadata(rawSystemPrompt);
@@ -88,14 +96,26 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
 }
 
 function mapMessagesToOllamaHistory(rows) {
+  const policyUserPlaceholder = "[Сообщение скрыто по правилам площадки.]";
   return rows
     .slice()
     .reverse()
-    .map((row) => ({
-      role: row.sender_type === "user" ? "user" : "assistant",
-      content: String(row.content || ""),
-    }))
-    .filter((message) => message.content.trim().length > 0);
+    .map((row) => {
+      const isUser = row.sender_type === "user";
+      const raw = String(row.content || "").trim();
+      if (!isUser && raw === FILTERED_BOT_MESSAGE_PLACEHOLDER) {
+        return null;
+      }
+      let content = String(row.content || "");
+      if (isUser && Number(row.policy_violation) === 1) {
+        content = policyUserPlaceholder;
+      }
+      return {
+        role: isUser ? "user" : "assistant",
+        content,
+      };
+    })
+    .filter((message) => message && String(message.content || "").trim().length > 0);
 }
 
 function extractPromptMetadata(systemPrompt) {
@@ -316,7 +336,10 @@ const ADULT_OR_EXPLICIT_PATTERNS = [
 function containsAdultOrExplicitSignals(text) {
   const value = String(text || "");
   if (!value.trim()) return false;
-  return ADULT_OR_EXPLICIT_PATTERNS.some((re) => re.test(value));
+  if (ADULT_OR_EXPLICIT_PATTERNS.some((re) => re.test(value))) return true;
+  if (policyWordSurroundedPattern("секс").test(value)) return true;
+  if (policyWordSurroundedPattern("порно").test(value)) return true;
+  return false;
 }
 
 /** Лёгкие замены вместо мата (порядок: сначала устойчивые фразы и длинные формы). */
@@ -479,6 +502,99 @@ function getLastUserMessageFromHistory(history = []) {
     }
   }
   return "";
+}
+
+/** Явный запрос «взрослого» контента в реплике пользователя (маркеры, не общий сленг). */
+function containsUserMatureMarkerRequest(text) {
+  const value = String(text || "");
+  if (!value.trim()) return false;
+  if (/\b18\s*\+\b/i.test(value)) return true;
+  if (/\bnsfw\b/i.test(value)) return true;
+  if (/18\s*плюс/i.test(value)) return true;
+  if (/\bвосемнадцать\s*плюс\b/i.test(value)) return true;
+  return false;
+}
+
+/** Мат и тяжёлая брань в сообщении пользователя (те же правила, что и для очистки ответа). */
+function containsUserProfanity(text) {
+  const value = String(text || "");
+  if (!value.trim()) return false;
+  for (const rule of PROFANITY_REPLACEMENT_RULES) {
+    if (value.search(rule.re) !== -1) return true;
+    const stripped = rule.re.source.replace(/\\b/g, "");
+    if (!stripped) continue;
+    try {
+      const wrapped = policyWordSurroundedPattern(stripped);
+      if (value.search(wrapped) !== -1) return true;
+    } catch {
+      /* ignore malformed derived patterns */
+    }
+  }
+  return false;
+}
+
+/** Жестокость, угрозы убийством/травмами, откровенный gore-запрос в реплике пользователя. */
+const VIOLENCE_OR_CRUELTY_PATTERNS = [
+  policyWordSurroundedPattern("убий(?:ство|ства|те|ть|ству|ством)?"),
+  policyWordSurroundedPattern("убей(?:те|ть)?"),
+  /(?<![0-9A-Za-zА-Яа-яЁё])(?:зарежь|зарезать|зарежу)(?![0-9A-Za-zА-Яа-яЁё])/iu,
+  policyWordSurroundedPattern("расчлен"),
+  policyWordSurroundedPattern("пытк[аиуеом]?"),
+  /(?<![0-9A-Za-zА-Яа-яЁё])(?:вы)?коли\s+(?:ему|ей|мне|тебе|им)\s+глаз/iu,
+  /(?<![0-9A-Za-zА-Яа-яЁё])отрежь\s+(?:ему|ей|мне|тебе|руку|ногу|палец|уши)/iu,
+  policyWordSurroundedPattern("добей\\s+до\\s+смерти"),
+  policyWordSurroundedPattern("калеч"),
+  /(?<![0-9A-Za-zА-Яа-яЁё])жесток(?:о|ая|ий|ую)\s*(?:уби|казн|пыт|расправ)/iu,
+  policyWordSurroundedPattern("кровав(?:ая|ое|ые|ую)?\\s*(?:расправ|расправа|бойня)"),
+  /(?<![0-9A-Za-zА-Яа-яЁё])(?:повесь|повесить)\s+(?:его|её|их|меня|нас)/iu,
+  policyWordSurroundedPattern("сожги\\s+за\\s+живого"),
+  /\btorture\b/i,
+  /\bgore\b/i,
+  /\bmurder\s+(?:him|her|them)\b/i,
+];
+
+function containsUserViolenceOrCrueltySignals(text) {
+  const value = String(text || "");
+  if (!value.trim()) return false;
+  return VIOLENCE_OR_CRUELTY_PATTERNS.some((re) => re.test(value));
+}
+
+/** Грубые сексуальные провокации вне словаря «порно/эротика» (например «го секс»). */
+const CASUAL_SEX_SOLICIT_PATTERNS = [
+  policyWordSurroundedPattern("го\\s+секс"),
+  policyWordSurroundedPattern("го\\s+порно"),
+  /(?<![0-9A-Za-zА-Яа-яЁё])(?:давай|хочу)\s+секс(?![0-9A-Za-zА-Яа-яЁё])/iu,
+  policyWordSurroundedPattern("секс\\s+прям\\s+сейчас"),
+  policyWordSurroundedPattern("(?:трахни|трахнуть|отъеб|выеб)"),
+];
+
+function containsCasualSexSolicit(text) {
+  const value = String(text || "");
+  if (!value.trim()) return false;
+  return CASUAL_SEX_SOLICIT_PATTERNS.some((re) => re.test(value));
+}
+
+/**
+ * Нарушение правил площадки в сообщении пользователя: жестокость, 18+/откровенность, мат.
+ * @returns {{ kind: 'violence' | 'adult' | 'profanity' } | null}
+ */
+function classifyUserPolicyViolation(text) {
+  const value = String(text || "").trim();
+  if (!value) return null;
+  if (containsUserViolenceOrCrueltySignals(value)) {
+    return { kind: "violence" };
+  }
+  if (
+    containsUserMatureMarkerRequest(value) ||
+    containsAdultOrExplicitSignals(value) ||
+    containsCasualSexSolicit(value)
+  ) {
+    return { kind: "adult" };
+  }
+  if (containsUserProfanity(value)) {
+    return { kind: "profanity" };
+  }
+  return null;
 }
 
 function normalizeForDuplicateCheck(text) {
@@ -792,4 +908,6 @@ module.exports = {
   getPromptSection,
   buildBotReplyFromHistory,
   generateBotReply,
+  FILTERED_BOT_MESSAGE_PLACEHOLDER,
+  classifyUserPolicyViolation,
 };
