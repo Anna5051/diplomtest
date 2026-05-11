@@ -815,7 +815,7 @@
           if (bubble && stack) {
             await animateBubbleSwipeReplace(bubble, data.reply.content);
             const hdr = row.querySelector(".message-card-header-actions");
-            if (hdr) hdr.innerHTML = buildMessageHeaderActions(data.reply);
+            if (hdr) hdr.innerHTML = buildMessageHeaderAreaHtml(data.reply);
             stack.querySelector(".message-actions--footer")?.remove();
             bubble.insertAdjacentHTML("afterend", buildMessageFooterActions(data.reply));
           } else {
@@ -880,7 +880,7 @@
       if (stack) stack.classList.remove("message-stack--editing");
       const headerActions = row.querySelector(".message-card-header-actions");
       if (headerActions) {
-        headerActions.innerHTML = buildMessageHeaderActions(target);
+        headerActions.innerHTML = buildMessageHeaderAreaHtml(target);
       }
       const bubble = row.querySelector(".message-bubble");
       if (bubble) bubble.classList.remove("message-bubble--editing");
@@ -1003,6 +1003,105 @@
       `;
     }
 
+    function messageMoreMenuIcon(kind) {
+      const stroke = 'stroke="currentColor" fill="none" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"';
+      const icons = {
+        copy: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="1.5" ${stroke}/><path d="M6 6h11v11" ${stroke}/></svg>`,
+        newchat: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 4h12v9H7l-3 3V4zm3 6h9v2H7V10zm10-6h5v12" ${stroke}/></svg>`,
+        rewind: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 10V4h6M20 14v6h-6M4 10a8 8 0 0 1 14.3-3.3M20 14a8 8 0 0 1-14.3 3.3" ${stroke}/></svg>`,
+      };
+      return icons[kind] || "";
+    }
+
+    function buildMessageMoreMenu(message) {
+      if (!message?.id) return "";
+      const id = message.id;
+      const row = (action, label, iconKind) =>
+        `<button type="button" class="message-more-item" role="menuitem" data-menu-action="${action}" data-message-id="${id}"><span class="message-more-item-label">${escapeHtml(label)}</span><span class="message-more-item-icon" aria-hidden="true">${messageMoreMenuIcon(iconKind)}</span></button>`;
+
+      const parts = [];
+      parts.push(row("copy", "Копировать", "copy"));
+      parts.push(row("newchat", "Новый чат отсюда", "newchat"));
+      parts.push(row("rewind", "Перемотать сюда", "rewind"));
+
+      return `
+        <div class="message-more-wrap">
+          <button type="button" class="message-more-btn" data-more-toggle="1" data-message-id="${id}" aria-expanded="false" aria-haspopup="true" aria-label="Действия с сообщением">⋯</button>
+          <div class="message-more-dropdown" role="menu" hidden>
+            ${parts.join("")}
+          </div>
+        </div>
+      `;
+    }
+
+    function buildMessageHeaderAreaHtml(message) {
+      return `${buildMessageHeaderActions(message)}${buildMessageMoreMenu(message)}`;
+    }
+
+    function closeAllMessageMoreMenus() {
+      messagesBox.querySelectorAll(".message-more-wrap").forEach((wrap) => {
+        wrap.classList.remove("message-more-open");
+        const drop = wrap.querySelector(".message-more-dropdown");
+        if (drop) drop.hidden = true;
+        const btn = wrap.querySelector(".message-more-btn");
+        if (btn) btn.setAttribute("aria-expanded", "false");
+      });
+    }
+
+    function getMessagePlainTextForCopy(message) {
+      if (!message) return "";
+      if (isPolicyFilteredBotMessage(message)) {
+        return [
+          "Этот контент отфильтрован. Убедитесь, что ваши чаты соответствуют нашим Условиям и Правилам сообщества.",
+          "Чтобы продолжить беседу, отправьте другое сообщение.",
+          "Перегенерируйте ответ кнопками ↻ или › под этим блоком либо перепишите свою реплику (✎ у вашего сообщения).",
+        ].join("\n\n");
+      }
+      return normalizeChatMessageText(message.content || "");
+    }
+
+    async function copyMessageTextById(messageId) {
+      const target = messageRows.find((item) => Number(item.id) === messageId);
+      if (!target) return;
+      const text = getMessagePlainTextForCopy(target);
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast("Скопировано");
+      } catch {
+        showToast("Не удалось скопировать");
+      }
+    }
+
+    async function rewindMessagesOnServer(messageId) {
+      const response = await fetch(
+        `${API_BASE}/chat/${currentChatId}/rewind-to/${messageId}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_id: userId }),
+        },
+      );
+      const data = await safeReadJson(response);
+      if (!response.ok) throw new Error(data.message || "Ошибка перемотки");
+      return data;
+    }
+
+    function openNewChatFromHere() {
+      if (isRestrictedBot) {
+        showToast("Новый чат с этим ботом недоступен");
+        return;
+      }
+      if (!botId) {
+        showToast("Не найден id персонажа");
+        return;
+      }
+      const qs = [`id=${encodeURIComponent(botId)}`, "new=1"];
+      if (activePersona?.id != null) {
+        qs.push(`persona=${encodeURIComponent(activePersona.id)}`);
+      }
+      window.location.href = `/pages/chat.html?${qs.join("&")}`;
+    }
+
     function buildMessageFooterActions(message) {
       if (!message?.id) return "";
       const canRegenerate = message.sender_type === "bot";
@@ -1068,7 +1167,7 @@
           <div class="message-top-row">
             <span class="message-author">${escapeHtml(name)}</span>
             <div class="message-card-header-actions">
-              ${!isLoadingUi ? buildMessageHeaderActions(message) : ""}
+              ${!isLoadingUi ? buildMessageHeaderAreaHtml(message) : ""}
             </div>
           </div>
           <div class="message-bubble ${isLoadingUi ? "loading" : ""}${isFilterNotice ? " message-bubble--filter-notice" : ""}">
@@ -1253,6 +1352,32 @@
       return data;
     }
 
+    async function runMenuMessageAction(menuAction, messageId) {
+      const target = messageRows.find((item) => Number(item.id) === messageId);
+      if (!target) return;
+
+      if (menuAction === "copy") {
+        await copyMessageTextById(messageId);
+        return;
+      }
+      if (menuAction === "newchat") {
+        openNewChatFromHere();
+        return;
+      }
+      if (menuAction === "rewind") {
+        const ok = await showChatConfirm(
+          "Все сообщения после этого будут удалены без восстановления. Продолжить?",
+          { confirmLabel: "Перемотать" },
+        );
+        if (!ok) return;
+        await rewindMessagesOnServer(messageId);
+        messageRows = messageRows.filter((item) => Number(item.id) <= messageId);
+        rerenderMessages();
+        showToast("История обрезана");
+        return;
+      }
+    }
+
     async function regenerateMessageOnServer(messageId, signal) {
       const activeProxy = getActiveProxyConfig();
       const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/${messageId}/regenerate`, {
@@ -1361,6 +1486,37 @@
     });
 
     messagesBox.addEventListener("click", async (event) => {
+      const moreToggle = event.target.closest(".message-more-btn");
+      if (moreToggle) {
+        event.stopPropagation();
+        const wrap = moreToggle.closest(".message-more-wrap");
+        const drop = wrap?.querySelector(".message-more-dropdown");
+        if (!wrap || !drop) return;
+        const wasOpen = !drop.hidden;
+        closeAllMessageMoreMenus();
+        if (!wasOpen) {
+          wrap.classList.add("message-more-open");
+          drop.hidden = false;
+          moreToggle.setAttribute("aria-expanded", "true");
+        }
+        return;
+      }
+
+      const menuItem = event.target.closest(".message-more-item");
+      if (menuItem) {
+        event.stopPropagation();
+        const menuAction = menuItem.dataset.menuAction;
+        const messageId = Number(menuItem.dataset.messageId);
+        if (!menuAction || !messageId) return;
+        closeAllMessageMoreMenus();
+        try {
+          await runMenuMessageAction(menuAction, messageId);
+        } catch (error) {
+          showToast(error.message || "Ошибка действия с сообщением");
+        }
+        return;
+      }
+
       const button = event.target.closest(".message-action-btn");
       if (!button) return;
 
@@ -1416,6 +1572,9 @@
     document.addEventListener("click", (event) => {
       if (!dropdownMenu.contains(event.target) && !menuBtn.contains(event.target)) {
         dropdownMenu.classList.remove("open");
+      }
+      if (!event.target.closest(".message-more-wrap")) {
+        closeAllMessageMoreMenus();
       }
     });
 

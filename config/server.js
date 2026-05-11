@@ -1836,6 +1836,45 @@ app.delete("/chat/:chatId/message/:messageId", async (req, res) => {
   }
 });
 
+/* Удалить все сообщения после указанного (перемотать сюда) */
+app.post("/chat/:chatId/rewind-to/:messageId", async (req, res) => {
+  const { chatId, messageId } = req.params;
+  const { user_id } = req.body;
+
+  if (!user_id) {
+    return res.status(400).json({ message: "Не указан пользователь" });
+  }
+
+  try {
+    const ownedChat = await getOwnedChat(chatId, user_id);
+    if (!ownedChat) return res.status(404).json({ message: "Чат не найден" });
+    if (ownedChat === "forbidden") {
+      return res.status(403).json({ message: "Нет доступа к этому чату" });
+    }
+
+    const existsRows = await dbQuery(
+      "SELECT id FROM messages WHERE id = ? AND chat_id = ? LIMIT 1",
+      [messageId, chatId],
+    );
+    if (!existsRows.length) {
+      return res.status(404).json({ message: "Сообщение не найдено" });
+    }
+
+    const deleteResult = await dbQuery(
+      "DELETE FROM messages WHERE chat_id = ? AND id > ?",
+      [chatId, messageId],
+    );
+    await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+
+    return res.json({
+      message: "История обрезана ✅",
+      deleted_count: Number(deleteResult.affectedRows) || 0,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: "Ошибка обрезки истории" });
+  }
+});
+
 app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
   const { chatId, messageId } = req.params;
   const { user_id, persona_prompt, persona_name, proxy } = req.body;
