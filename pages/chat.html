@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Чат — Charitor.ai</title>
   <link rel="stylesheet" href="/css/general.css" />
-  <link rel="stylesheet" href="/css/chat.css" />
+  <link rel="stylesheet" href="/css/chat.css?v=user-tight-wrap" />
   <script src="/js/notifications.js" defer></script>
 </head>
 
@@ -301,24 +301,55 @@
     let activeProxyId = null;
     let editingProxyId = null;
 
+    const CHARITOR_FILTERED_BOT_PLACEHOLDER = "__CHARITOR_MSG_FILTERED__";
+
+    /** Текст в стиле Character.ai: вежливый отказ вместо ответа (на русском). */
+    const POLICY_FILTER_REFUSAL_RU =
+      "Извините, но я не могу выполнить этот запрос. Я стремлюсь к тому, чтобы общение было безопасным и уважительным для всех. Если хотите, мы можем продолжить ролевую игру в другом направлении, которое соответствует правилам повествования. Напишите, как вы хотите продолжить.";
+
+    function isPolicyFilteredBotMessage(message) {
+      if (!message || message.sender_type !== "bot") return false;
+      return String(message.content || "").trim() === CHARITOR_FILTERED_BOT_PLACEHOLDER;
+    }
+
+    function policyFilterReasonSuffix(filterReason) {
+      if (filterReason === "violence") {
+        return " Категория: жестокость или угрозы насилием.";
+      }
+      if (filterReason === "adult") {
+        return " Категория: 18+ или откровенные формулировки.";
+      }
+      if (filterReason === "profanity") {
+        return " Категория: нецензурная лексика.";
+      }
+      return "";
+    }
+
     function escapeHtml(text) {
       const div = document.createElement("div");
       div.textContent = text ?? "";
       return div.innerHTML;
     }
 
-    /** Убирает ведущие пробелы у каждой строки (в т.ч. U+3000, NBSP) — при pre-wrap модель часто даёт «левый отступ». */
+    /** Убирает ведущие пробелы у каждой строки (trimStart + редкие символы, которые trim не трогает). */
     function normalizeChatMessageText(text) {
       if (text == null) return "";
-      const lineLead = /^[\t \u00a0\u3000\u2000-\u200f\u202f\u205f\ufeff]+/;
-      return String(text)
-        .replace(/^\uFEFF/, "")
+      const raw = String(text);
+      if (raw.trim() === CHARITOR_FILTERED_BOT_PLACEHOLDER) {
+        return POLICY_FILTER_REFUSAL_RU;
+      }
+      const stripOddLineStart = (line) =>
+        line
+          .trimStart()
+          .replace(/^[\u180e\u2800\u200b\u200c\ufeff]+/, "");
+      return raw
         .replace(/\r\n/g, "\n")
         .replace(/\r/g, "\n")
         .split("\n")
-        .map((line) => line.replace(lineLead, ""))
+        .map(stripOddLineStart)
         .join("\n")
-        .replace(/^\n+/, "");
+        .replace(/^\n+/, "")
+        .trimStart();
     }
 
     function toPlainText(value) {
@@ -518,24 +549,6 @@
         pageToast.classList.remove("show");
         pageToast.classList.add("hidden");
       }, 2200);
-    }
-
-    const CHARITOR_FILTERED_BOT_PLACEHOLDER = "__CHARITOR_MSG_FILTERED__";
-
-    function isPolicyFilteredBotMessage(message) {
-      if (!message || message.sender_type !== "bot") return false;
-      return String(message.content || "").trim() === CHARITOR_FILTERED_BOT_PLACEHOLDER;
-    }
-
-    function buildContentFilterCardHtml() {
-      return `
-        <div class="content-filter-notice" role="alert">
-          <div class="content-filter-notice__icon" aria-hidden="true">😐</div>
-          <p class="content-filter-notice__title">Этот контент отфильтрован. Убедитесь, что ваши чаты соответствуют нашим Условиям и Правилам сообщества.</p>
-          <p class="content-filter-notice__hint">Чтобы продолжить беседу, отправьте другое сообщение.</p>
-          <p class="content-filter-notice__action-hint">Перегенерируйте ответ кнопками ↻ или › под этим блоком либо перепишите свою реплику (✎ у вашего сообщения).</p>
-        </div>
-      `;
     }
 
     function showChatConfirm(message, options = {}) {
@@ -805,7 +818,7 @@
       const signal = startAiBusy();
 
       try {
-        const data = await regenerateMessageOnServer(messageId, signal);
+        const data = await regenerateMessageOnServer(messageId, signal, { swipe });
         messageRows[idx] = data.reply;
 
         if (swipe) {
@@ -1050,13 +1063,6 @@
 
     function getMessagePlainTextForCopy(message) {
       if (!message) return "";
-      if (isPolicyFilteredBotMessage(message)) {
-        return [
-          "Этот контент отфильтрован. Убедитесь, что ваши чаты соответствуют нашим Условиям и Правилам сообщества.",
-          "Чтобы продолжить беседу, отправьте другое сообщение.",
-          "Перегенерируйте ответ кнопками ↻ или › под этим блоком либо перепишите свою реплику (✎ у вашего сообщения).",
-        ].join("\n\n");
-      }
       return normalizeChatMessageText(message.content || "");
     }
 
@@ -1142,6 +1148,8 @@
       const type = message.sender_type === "user" ? "user" : "bot";
       const isLoadingUi = Boolean(options.loading || message._loading);
       const isFilterNotice = type === "bot" && isPolicyFilteredBotMessage(message);
+      const isUserPolicyFlagged =
+        type === "user" && Number(message.policy_violation) === 1;
 
       const row = document.createElement("div");
       row.className = type === "user"
@@ -1170,9 +1178,10 @@
               ${!isLoadingUi ? buildMessageHeaderAreaHtml(message) : ""}
             </div>
           </div>
-          <div class="message-bubble ${isLoadingUi ? "loading" : ""}${isFilterNotice ? " message-bubble--filter-notice" : ""}">
-            ${isLoadingUi ? buildTypingDotsHtml() : isFilterNotice ? buildContentFilterCardHtml() : escapeHtml(normalizeChatMessageText(message.content))}
+          <div class="message-bubble ${isLoadingUi ? "loading" : ""}"${isFilterNotice ? ' role="status" aria-live="polite"' : ""}>
+            ${isLoadingUi ? buildTypingDotsHtml() : escapeHtml(normalizeChatMessageText(message.content))}
           </div>
+          ${isUserPolicyFlagged && !isLoadingUi ? `<p class="message-policy-hint" role="note">Реплика не проходит правила площадки (жестокость, 18+ или мат). Для модели в истории она учитывается как скрытая; ответ персонажа ограничен.</p>` : ""}
           ${!isLoadingUi ? buildMessageFooterActions(message) : ""}
         </div>
       `;
@@ -1378,7 +1387,7 @@
       }
     }
 
-    async function regenerateMessageOnServer(messageId, signal) {
+    async function regenerateMessageOnServer(messageId, signal, { swipe = false } = {}) {
       const activeProxy = getActiveProxyConfig();
       const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/${messageId}/regenerate`, {
         method: "POST",
@@ -1387,6 +1396,7 @@
         },
         body: JSON.stringify({
           user_id: userId,
+          swipe: Boolean(swipe),
           persona_prompt: activePersona?.persona_prompt || activePersona?.description || "",
           persona_name: activePersona?.name || "",
           proxy: activeProxy
@@ -1464,8 +1474,11 @@
           messageRows.push(data.reply);
         }
         rerenderMessages();
+        if (data.content_filtered || Number(data.user_message?.policy_violation) === 1) {
+          const base = (data.message || "Контент отфильтрован по правилам площадки.").trim();
+          showToast(base + policyFilterReasonSuffix(data.filter_reason));
+        }
         if (data.reply && isPolicyFilteredBotMessage(data.reply)) {
-          showToast("Сообщение отфильтровано по правилам площадки");
           requestAnimationFrame(() => {
             const row = findMessageRow(Number(data.reply.id));
             row?.scrollIntoView({ behavior: "smooth", block: "nearest" });

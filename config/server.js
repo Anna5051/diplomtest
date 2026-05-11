@@ -119,6 +119,11 @@ const {
   classifyUserPolicyViolation,
   FILTERED_BOT_MESSAGE_PLACEHOLDER,
 } = require("./aiChat");
+const {
+  encryptMessageContentForDb,
+  decryptMessageContentFromDb,
+  decryptMessageRowsForApi,
+} = require("./messageContentCrypto");
 let hasEmailConfirmedColumnCache = null;
 
 function getString(value) {
@@ -1263,7 +1268,7 @@ app.get("/chat-by-bot/:botId", (req, res) => {
         res.json({
           chat,
           bot,
-          messages: msgRows,
+          messages: decryptMessageRowsForApi(msgRows),
         });
       });
     };
@@ -1318,7 +1323,7 @@ app.get("/chat-by-bot/:botId", (req, res) => {
 
             db.query(
               greetingSql,
-              [newChat.id, bot.greeting_message],
+              [newChat.id, encryptMessageContentForDb(bot.greeting_message)],
               (greetErr) => {
                 if (greetErr) {
                   return res.status(500).json({
@@ -1511,7 +1516,7 @@ app.get("/chat/:chatId", (req, res) => {
           avatar_url: chat.avatar_url,
           greeting_message: chat.greeting_message,
         },
-        messages: msgRows,
+        messages: decryptMessageRowsForApi(msgRows),
       });
     });
   });
@@ -1579,7 +1584,7 @@ app.post("/chat/:chatId/message", (req, res) => {
 
     db.query(
       saveUserMessageSql,
-      [chatId, normalizedText, policyViolationFlag],
+      [chatId, encryptMessageContentForDb(normalizedText), policyViolationFlag],
       (saveUserErr, saveUserResult) => {
         if (saveUserErr) {
           return res.status(500).json({
@@ -1607,7 +1612,7 @@ app.post("/chat/:chatId/message", (req, res) => {
 
           return db.query(
             saveFilteredBotSql,
-            [chatId, FILTERED_BOT_MESSAGE_PLACEHOLDER],
+            [chatId, encryptMessageContentForDb(FILTERED_BOT_MESSAGE_PLACEHOLDER)],
             (saveBotErr, saveBotResult) => {
               if (saveBotErr) {
                 return res.status(500).json({
@@ -1684,7 +1689,7 @@ app.post("/chat/:chatId/message", (req, res) => {
             VALUES (?, 'bot', ?, NOW())
           `;
 
-          db.query(saveBotMessageSql, [chatId, botReply], (saveBotErr, saveBotResult) => {
+          db.query(saveBotMessageSql, [chatId, encryptMessageContentForDb(botReply)], (saveBotErr, saveBotResult) => {
             if (saveBotErr) {
               return res.status(500).json({
                 message: "Ошибка сохранения ответа бота",
@@ -1754,9 +1759,10 @@ app.put("/chat/:chatId/message/:messageId", async (req, res) => {
       return res.status(404).json({ message: "Сообщение не найдено" });
     }
 
+    const existingPlain = decryptMessageContentFromDb(messageRows[0].content);
     if (
       messageRows[0].sender_type === "bot" &&
-      String(messageRows[0].content || "").trim() === FILTERED_BOT_MESSAGE_PLACEHOLDER
+      String(existingPlain || "").trim() === FILTERED_BOT_MESSAGE_PLACEHOLDER
     ) {
       return res.status(400).json({
         message: "Сообщение фильтра контента нельзя редактировать",
@@ -1777,7 +1783,7 @@ app.put("/chat/:chatId/message/:messageId", async (req, res) => {
           SET content = ?, policy_violation = 0
           WHERE id = ? AND chat_id = ?
         `,
-        [normalizedText, messageId, chatId],
+        [encryptMessageContentForDb(normalizedText), messageId, chatId],
       );
     } else {
       await dbQuery(
@@ -1786,7 +1792,7 @@ app.put("/chat/:chatId/message/:messageId", async (req, res) => {
           SET content = ?
           WHERE id = ? AND chat_id = ?
         `,
-        [normalizedText, messageId, chatId],
+        [encryptMessageContentForDb(normalizedText), messageId, chatId],
       );
     }
     await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
@@ -1877,7 +1883,7 @@ app.post("/chat/:chatId/rewind-to/:messageId", async (req, res) => {
 
 app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
   const { chatId, messageId } = req.params;
-  const { user_id, persona_prompt, persona_name, proxy } = req.body;
+  const { user_id, persona_prompt, persona_name, proxy, swipe } = req.body;
   const runtimeConfig = normalizeRuntimeConfigFromBodyProxy(proxy);
 
   if (!user_id) {
@@ -1926,7 +1932,7 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
       String(persona_prompt || ""),
       String(persona_name || ""),
       upperMessageId,
-      { regenerate: true },
+      { regenerate: true, swipe: Boolean(swipe) },
       runtimeConfig,
     );
 
@@ -1936,7 +1942,7 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
         SET content = ?
         WHERE id = ? AND chat_id = ?
       `,
-      [regenerated, messageId, chatId],
+      [encryptMessageContentForDb(regenerated), messageId, chatId],
     );
     await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
 
@@ -1993,7 +1999,7 @@ app.post("/chat/:chatId/continue", async (req, res) => {
         )
         VALUES (?, 'bot', ?, NOW())
       `,
-      [chatId, continuedReply],
+      [chatId, encryptMessageContentForDb(continuedReply)],
     );
     await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
 

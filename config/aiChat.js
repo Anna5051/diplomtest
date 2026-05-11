@@ -2,6 +2,10 @@
  * Ollama: вызовы API, сбор системного промпта и проверка ответов бота.
  */
 
+const {
+  decryptMessageContentFromDb,
+} = require("./messageContentCrypto");
+
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:3b";
 const OLLAMA_FALLBACK_MODEL = process.env.OLLAMA_FALLBACK_MODEL || "qwen2.5:1.5b";
@@ -102,11 +106,12 @@ function mapMessagesToOllamaHistory(rows) {
     .reverse()
     .map((row) => {
       const isUser = row.sender_type === "user";
-      const raw = String(row.content || "").trim();
+      const plainContent = decryptMessageContentFromDb(row.content);
+      const raw = String(plainContent || "").trim();
       if (!isUser && raw === FILTERED_BOT_MESSAGE_PLACEHOLDER) {
         return null;
       }
-      let content = String(row.content || "");
+      let content = String(plainContent || "");
       if (isUser && Number(row.policy_violation) === 1) {
         content = policyUserPlaceholder;
       }
@@ -186,6 +191,7 @@ async function buildBotReplyFromHistory(
     personaName: String(personaName || ""),
     history: mapMessagesToOllamaHistory(historyRows),
     regenerate: Boolean(flags.regenerate),
+    swipeAlternative: Boolean(flags.swipe),
     runtimeConfig,
   });
 }
@@ -541,6 +547,11 @@ const VIOLENCE_OR_CRUELTY_PATTERNS = [
   policyWordSurroundedPattern("расчлен"),
   policyWordSurroundedPattern("пытк[аиуеом]?"),
   /(?<![0-9A-Za-zА-Яа-яЁё])(?:вы)?коли\s+(?:ему|ей|мне|тебе|им)\s+глаз/iu,
+  /(?<![0-9A-Za-zА-Яа-яЁё])(?:вырву|вырвем|вырвешь|вырвет|вырываю|вырвать)\s+[^.!?\n]{0,60}\bглаз/iu,
+  /(?<![0-9A-Za-zА-Яа-яЁё])(?:раскрою|раскроем|раскроешь|вспорю|вспороть)\s+[^.!?\n]{0,50}\bживот/iu,
+  /(?<![0-9A-Za-zА-Яа-яЁё])достать\s+органы/iu,
+  /(?<![0-9A-Za-zА-Яа-яЁё])(?:вырву|вырвать)\s+[^.!?\n]{0,50}\b(?:печень|сердце|лёгкие|легкие)\b/iu,
+  /(?<![0-9A-Za-zА-Яа-яЁё])убь(?:ю|ёт|ем|ете|ишь)(?![0-9A-Za-zА-Яа-яЁё])/iu,
   /(?<![0-9A-Za-zА-Яа-яЁё])отрежь\s+(?:ему|ей|мне|тебе|руку|ногу|палец|уши)/iu,
   policyWordSurroundedPattern("добей\\s+до\\s+смерти"),
   policyWordSurroundedPattern("калеч"),
@@ -566,6 +577,7 @@ const CASUAL_SEX_SOLICIT_PATTERNS = [
   /(?<![0-9A-Za-zА-Яа-яЁё])(?:давай|хочу)\s+секс(?![0-9A-Za-zА-Яа-яЁё])/iu,
   policyWordSurroundedPattern("секс\\s+прям\\s+сейчас"),
   policyWordSurroundedPattern("(?:трахни|трахнуть|отъеб|выеб)"),
+  /(?<![0-9A-Za-zА-Яа-яЁё])трахн(?:у|ём|ем|ешь|ет|ете|ут|уть|и|ите|ул|ула|ули)(?![0-9A-Za-zА-Яа-яЁё])/iu,
 ];
 
 function containsCasualSexSolicit(text) {
@@ -747,9 +759,24 @@ async function generateBotReply({
   personaName,
   history,
   regenerate = false,
+  swipeAlternative = false,
   runtimeConfig = {},
 }) {
-  const samplingOptions = buildSamplingOptions(regenerate);
+  let samplingOptions = buildSamplingOptions(regenerate);
+  if (swipeAlternative) {
+    samplingOptions = {
+      ...samplingOptions,
+      temperature: Math.min(
+        0.98,
+        (samplingOptions.temperature ?? OLLAMA_TEMPERATURE) + 0.14,
+      ),
+      top_p: Math.max(samplingOptions.top_p ?? OLLAMA_TOP_P, 0.92),
+      repeat_penalty: Math.min(
+        1.34,
+        (samplingOptions.repeat_penalty ?? OLLAMA_REPEAT_PENALTY) + 0.08,
+      ),
+    };
+  }
   const customPrompt = String(runtimeConfig?.custom_prompt || "").trim();
   const usingProxy = Boolean(String(runtimeConfig?.proxy_url || "").trim());
 
