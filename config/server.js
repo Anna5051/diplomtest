@@ -121,11 +121,17 @@ const {
   FILTERED_BOT_MESSAGE_PLACEHOLDER,
 } = require("./aiChat");
 const {
+  getBuiltinLlmRuntimeConfig,
   getServerLlmRuntimeConfig,
   getLlmPublicStatus,
   logLlmModeAtStartup,
+  getBuiltinLlmMode,
+  refreshOllamaHealth,
   applyModelOverrideToRuntimeConfig,
   fetchAvailableLlmModels,
+  fetchChutesProxyPresets,
+  getServerCloudLlmRuntimeConfig,
+  enrichCloudProxyRuntimeConfig,
 } = require("./llmEnv");
 const {
   encryptMessageContentForDb,
@@ -472,43 +478,119 @@ function resolveRuntimeConfig(bodyProxy, bodyLlmModel, bodyLlmSettings) {
         ? applyModelOverrideToRuntimeConfig(fromBody, modelOverride)
         : fromBody;
   } else {
-    const serverCfg = getServerLlmRuntimeConfig();
+    const serverCfg = getBuiltinLlmRuntimeConfig();
     cfg = modelOverride
       ? applyModelOverrideToRuntimeConfig(serverCfg, modelOverride)
       : serverCfg;
   }
-  return applyLlmSettingsToRuntimeConfig(cfg, bodyLlmSettings);
+  return enrichCloudProxyRuntimeConfig(
+    applyLlmSettingsToRuntimeConfig(cfg, bodyLlmSettings),
+  );
 }
 
-function rejectIfCloudLlmNotReady(res, bodyProxy) {
+function rejectIfBuiltinLlmNotReady(res, bodyProxy) {
   const fromBody = normalizeRuntimeConfigFromBodyProxy(bodyProxy);
   if (fromBody.proxy_url) return false;
 
   const status = getLlmPublicStatus();
-  if (status.mode === "cloud" && !status.ready) {
+  if (status.ready) return false;
+
+  if (status.mode === "cloud") {
     res.status(503).json({
       message:
-        "Облачная модель не настроена: укажите LLM_API_KEY в .env или положите ключ в config/secrets/llm-api-key.txt (Groq: console.groq.com/keys)",
+        "Встроенная облачная модель не настроена на сервере. Добавьте LLM_API_KEY в .env или выберите свой прокси в настройках чата.",
     });
     return true;
   }
-  return false;
+
+  res.status(503).json({
+    message:
+      "Бесплатная встроенная модель сейчас недоступна. Попробуйте позже или укажите свой API в «Настройки API» → Прокси.",
+    admin_hint:
+      "На сервере с сайтом: установите Ollama, выполните ollama serve и ollama pull qwen2.5:3b",
+  });
+  return true;
 }
 
-app.get("/api/llm-status", (req, res) => {
+function httpStatusFromLlmError(error) {
+  const msg = String(error?.message || "");
+  const match = msg.match(/LLM error \((\d{3})\)/i);
+  if (match) {
+    const code = Number(match[1]);
+    if (code >= 400 && code < 600) return code;
+  }
+  return 500;
+}
+
+function userFacingLlmErrorMessage(error) {
+  const msg = String(error?.message || "").trim();
+  const status = httpStatusFromLlmError(error);
+  if (status === 429) {
+    return "Лимит API (429): слишком много запросов. Подождите 1–2 минуты или переключитесь на «Встроенная (бесплатно)».";
+  }
+  if (status === 401) {
+    return "Ключ API не принят (401). Откройте прокси Chutes → ✎ и вставьте ключ cpk_...";
+  }
+  if (status === 403) {
+    return "Доступ к API запрещён (403). Проверьте ключ и тариф провайдера.";
+  }
+  if (status === 503 || status === 502 || status === 504) {
+    return "Сервис модели временно недоступен. Попробуйте позже или встроенную Ollama.";
+  }
+  if (msg.startsWith("LLM error")) {
+    return `Ошибка модели: ${msg}`;
+  }
+  return msg || "Не удалось получить ответ от модели";
+}
+
+function respondWithLlmError(res, error, prefix = "") {
+  const status = httpStatusFromLlmError(error);
+  const body = userFacingLlmErrorMessage(error);
+  console.warn(`[LLM] ${prefix}${body}`);
+  return res.status(status >= 400 && status < 600 ? status : 500).json({
+    message: prefix ? `${prefix}${body}` : body,
+    llm_error: true,
+  });
+}
+
+app.get("/api/llm-status", async (req, res) => {
+  if (getBuiltinLlmMode() === "ollama") {
+    await refreshOllamaHealth();
+  }
   const status = getLlmPublicStatus();
   res.json({
     ...status,
     default_model: status.model,
-    models_supported: status.mode === "cloud" && status.ready,
+    models_supported: Boolean(status.ready),
   });
+});
+
+app.get("/api/chutes-proxy-presets", async (req, res) => {
+  try {
+    const presets = await fetchChutesProxyPresets();
+    const cloud = getServerCloudLlmRuntimeConfig();
+    res.json({
+      presets,
+      provider: "chutes",
+      server_has_key: Boolean(cloud.api_key),
+    });
+  } catch {
+    res.status(500).json({
+      message: "Не удалось загрузить пресеты Chutes",
+      presets: [],
+    });
+  }
 });
 
 app.get("/api/llm-models", async (req, res) => {
   try {
     const status = getLlmPublicStatus();
-    if (status.mode !== "cloud" || !status.ready) {
-      return res.json({ models: [], default_model: status.model || null });
+    if (!status.ready) {
+      return res.json({
+        models: [],
+        default_model: status.model || null,
+        provider: status.provider || null,
+      });
     }
     const models = await fetchAvailableLlmModels();
     res.json({
@@ -1841,7 +1923,7 @@ app.post("/chat/:chatId/message", (req, res) => {
     }
 
     const chat = chatRows[0];
-    if (rejectIfCloudLlmNotReady(res, req.body?.proxy)) return;
+    if (rejectIfBuiltinLlmNotReady(res, req.body?.proxy)) return;
 
     const policyHit = classifyUserPolicyViolation(normalizedText);
     const policyViolationFlag = policyHit ? 1 : 0;
@@ -1949,8 +2031,20 @@ app.post("/chat/:chatId/message", (req, res) => {
               runtimeConfig,
             });
           } catch (modelErr) {
-            return res.status(500).json({
-              message: `Не удалось получить ответ от модели: ${String(modelErr?.message || "неизвестная ошибка")}`,
+            const status = httpStatusFromLlmError(modelErr);
+            const body = userFacingLlmErrorMessage(modelErr);
+            console.warn(`[LLM] send message: ${body}`);
+            return res.status(status >= 400 && status < 600 ? status : 500).json({
+              message: body,
+              llm_error: true,
+              user_message_saved: true,
+              user_message: {
+                id: saveUserResult.insertId,
+                chat_id: Number(chatId),
+                sender_type: "user",
+                content: normalizedText,
+                policy_violation: policyViolationFlag,
+              },
             });
           }
 
@@ -2195,6 +2289,152 @@ app.post("/chat/:chatId/rewind-to/:messageId", async (req, res) => {
   }
 });
 
+app.post("/chat/:chatId/message/:messageId/generate-reply", async (req, res) => {
+  const { chatId, messageId } = req.params;
+  const { user_id, persona_prompt, persona_name, proxy } = req.body;
+  const runtimeConfig = resolveRuntimeConfig(
+    proxy,
+    req.body?.llm_model,
+    req.body?.llm_settings,
+  );
+
+  if (!user_id) {
+    return res.status(400).json({ message: "Не указан пользователь" });
+  }
+  if (rejectIfBuiltinLlmNotReady(res, req.body?.proxy)) return;
+
+  try {
+    const ownedChat = await getOwnedChat(chatId, user_id);
+    if (!ownedChat) return res.status(404).json({ message: "Чат не найден" });
+    if (ownedChat === "forbidden") {
+      return res.status(403).json({ message: "Нет доступа к этому чату" });
+    }
+
+    const userRows = await dbQuery(
+      `
+        SELECT id, sender_type
+        FROM messages
+        WHERE id = ? AND chat_id = ?
+        LIMIT 1
+      `,
+      [messageId, chatId],
+    );
+    if (!userRows.length) {
+      return res.status(404).json({ message: "Сообщение не найдено" });
+    }
+    if (userRows[0].sender_type !== "user") {
+      return res.status(400).json({
+        message: "Ответ можно запросить только для сообщения пользователя",
+      });
+    }
+
+    const nextBotRows = await dbQuery(
+      `
+        SELECT id
+        FROM messages
+        WHERE chat_id = ? AND id > ? AND sender_type = 'bot'
+        ORDER BY id ASC
+        LIMIT 1
+      `,
+      [chatId, messageId],
+    );
+
+    if (nextBotRows.length) {
+      const botMessageId = Number(nextBotRows[0].id);
+      const botTargetRows = await dbQuery(
+        `
+          SELECT id, sender_type, content, content_variants
+          FROM messages
+          WHERE id = ? AND chat_id = ?
+          LIMIT 1
+        `,
+        [botMessageId, chatId],
+      );
+      if (!botTargetRows.length) {
+        return res.status(404).json({ message: "Ответ бота не найден" });
+      }
+
+      const oldestBotId = await getOldestBotMessageIdInChat(chatId);
+      if (oldestBotId != null && botMessageId === oldestBotId) {
+        return res.status(400).json({
+          message: "Начальное сообщение бота нельзя перегенерировать",
+        });
+      }
+
+      const regenerated = await buildBotReplyFromHistory(
+        dbQuery,
+        chatId,
+        ownedChat,
+        String(persona_prompt || ""),
+        String(persona_name || ""),
+        Number(messageId),
+        { regenerate: true },
+        runtimeConfig,
+      );
+
+      await dbQuery(
+        `
+          UPDATE messages
+          SET content = ?, content_variants = NULL
+          WHERE id = ? AND chat_id = ?
+        `,
+        [encryptMessageContentForDb(regenerated), botMessageId, chatId],
+      );
+      await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+
+      return res.json({
+        message: "Ответ бота обновлён ✅",
+        regenerated_existing: true,
+        reply: {
+          id: botMessageId,
+          chat_id: Number(chatId),
+          sender_type: "bot",
+          content: regenerated,
+        },
+      });
+    }
+
+    const botReply = await buildBotReplyFromHistory(
+      dbQuery,
+      chatId,
+      ownedChat,
+      String(persona_prompt || ""),
+      String(persona_name || ""),
+      Number(messageId),
+      {},
+      runtimeConfig,
+    );
+
+    const insertResult = await dbQuery(
+      `
+        INSERT INTO messages
+        (
+          chat_id,
+          sender_type,
+          content,
+          created_at
+        )
+        VALUES (?, 'bot', ?, NOW())
+      `,
+      [chatId, encryptMessageContentForDb(botReply)],
+    );
+    await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+
+    return res.json({
+      message: "Ответ бота получен ✅",
+      regenerated_existing: false,
+      reply: {
+        id: insertResult.insertId,
+        chat_id: Number(chatId),
+        sender_type: "bot",
+        content: botReply,
+      },
+    });
+  } catch (error) {
+    return respondWithLlmError(res, error);
+  }
+});
+
 app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
   const { chatId, messageId } = req.params;
   const { user_id, persona_prompt, persona_name, proxy, swipe } = req.body;
@@ -2207,7 +2447,7 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
   if (!user_id) {
     return res.status(400).json({ message: "Не указан пользователь" });
   }
-  if (rejectIfCloudLlmNotReady(res, req.body?.proxy)) return;
+  if (rejectIfBuiltinLlmNotReady(res, req.body?.proxy)) return;
 
   try {
     const ownedChat = await getOwnedChat(chatId, user_id);
@@ -2340,9 +2580,7 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
       },
     });
   } catch (error) {
-    return res.status(500).json({
-      message: `Ошибка перегенерации сообщения: ${String(error?.message || "неизвестная ошибка")}`,
-    });
+    return respondWithLlmError(res, error, "Перегенерация: ");
   }
 });
 
@@ -2358,7 +2596,7 @@ app.post("/chat/:chatId/continue", async (req, res) => {
   if (!user_id) {
     return res.status(400).json({ message: "Не указан пользователь" });
   }
-  if (rejectIfCloudLlmNotReady(res, req.body?.proxy)) return;
+  if (rejectIfBuiltinLlmNotReady(res, req.body?.proxy)) return;
 
   try {
     const ownedChat = await getOwnedChat(chatId, user_id);
@@ -3506,7 +3744,7 @@ function startHttpServer(port) {
         console.error("БД: ошибка —", dbErr.message);
       } else {
         console.log("БД: подключение установлено");
-        logLlmModeAtStartup();
+        void logLlmModeAtStartup();
         ensurePersonaRoleColumn();
         ensureUserBlockedColumn();
         ensureBotBlockedColumn();

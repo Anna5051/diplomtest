@@ -5,6 +5,7 @@
 const {
   decryptMessageContentFromDb,
 } = require("./messageContentCrypto");
+const { structureRoleplayParagraphs } = require("../js/roleplayParagraphs");
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:3b";
@@ -59,7 +60,15 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
       "Если нужно отреагировать на пользователя, ссылайся только на уже написанное им сообщение без дописывания новых действий.",
       "Можно описывать только реакцию персонажа на уже сказанное пользователем и предлагать пользователю выбор.",
       "Не вставляй реплики за пользователя и не дописывай продолжение его фраз.",
-      "Пиши связным естественным текстом: 4-8 осмысленных предложений, без искусственного шаблона.",
+      "Формат как в Janitor: 2–4 смысловых абзаца на ответ, НЕ дроби каждое предложение отдельно.",
+      "Описание действий — в *звёздочках* (можно в том же абзаце, что и повествование, если коротко).",
+      "Прямая речь — в «…»; короткое «её голос прозвучал…» / «— сказала она» пиши в том же абзаце, что и реплика, без лишнего разрыва.",
+      "НЕ начинай реплику с тире (—); кавычки в начале речи.",
+      "Запрещено: — Привет. Нужно: «Привет» (кавычки в начале реплики, без тире).",
+      "Запрещено описывать действия и мысли пользователя (ты стоишь, ты чувствуешь, перед тобой) — только персонаж и его реакция.",
+      "Не заключай в кавычки описание сцены (её голос прозвучал…) — кавычки только для прямой речи персонажа.",
+      "Внутренние мысли персонажа — коротким абзацем в *звёздочках* (курсив).",
+      "Чередуй: действие → речь → мысль → действие; между блоками всегда пустая строка.",
       "Если добавляешь действия в *...*, они должны быть логичными и простыми, без вычурных метафор.",
       "Не добавляй бессмысленный 'красивый хвост' в конце ответа.",
       "Соблюдай нормы русского языка: орфография, пунктуация, согласование слов, естественные формулировки.",
@@ -98,6 +107,37 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
   }
 
   return parts.join("\n\n");
+}
+
+/** OpenAI/Chutes: одно system-сообщение только в начале, дальше user/assistant */
+function buildMessagesForLlmApi(
+  botSystemPrompt,
+  personaPrompt,
+  botName,
+  customPrompt,
+  history,
+) {
+  const systemParts = [buildSystemPrompt(botSystemPrompt, personaPrompt, botName)];
+  const extra = String(customPrompt || "").trim();
+  if (extra) {
+    systemParts.push(`Дополнительные инструкции:\n${extra}`);
+  }
+
+  const messages = [
+    {
+      role: "system",
+      content: systemParts.join("\n\n").trim(),
+    },
+  ];
+
+  for (const item of history || []) {
+    const role = item?.role === "user" ? "user" : "assistant";
+    const content = String(item?.content || "").trim();
+    if (!content) continue;
+    messages.push({ role, content });
+  }
+
+  return messages;
 }
 
 function mapMessagesToOllamaHistory(rows) {
@@ -233,6 +273,11 @@ async function requestOllamaChat(model, messages, optionOverrides = {}, runtimeC
     const proxyApiKey = String(runtimeConfig?.api_key || "").trim();
 
     const useProxy = Boolean(proxyUrl);
+    if (useProxy && !proxyApiKey) {
+      throw new Error(
+        "LLM error (401): не указан ключ API. Добавьте LLM_API_KEY в .env на сервере или cpk_... в настройках прокси.",
+      );
+    }
     const proxyReferer = String(runtimeConfig?.http_referer || "").trim();
     const proxyTitle = String(runtimeConfig?.x_title || "").trim();
     const response = await fetch(useProxy ? proxyUrl : `${OLLAMA_BASE_URL}/api/chat`, {
@@ -250,6 +295,7 @@ async function requestOllamaChat(model, messages, optionOverrides = {}, runtimeC
               messages,
               temperature: options.temperature,
               top_p: options.top_p,
+              max_tokens: Number(process.env.LLM_MAX_TOKENS) || 1024,
               stream: false,
             }
           : {
@@ -264,7 +310,18 @@ async function requestOllamaChat(model, messages, optionOverrides = {}, runtimeC
 
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(data.error || data.message || `LLM error (${response.status})`);
+      const apiErr =
+        (typeof data?.error === "object" && data.error?.message) ||
+        (typeof data?.error === "string" && data.error) ||
+        data?.message ||
+        (typeof data?.detail === "string" && data.detail) ||
+        "";
+      const detail = String(apiErr || "").trim();
+      throw new Error(
+        detail
+          ? `LLM error (${response.status}): ${detail}`
+          : `LLM error (${response.status})`,
+      );
     }
 
     const rawText = String(
@@ -303,7 +360,7 @@ async function polishRussianReply(
     "Убери откровенный сексуальный подтекст, порнографические и жестоко-насильственные подробности; оставь сцену безопасной для широкой аудитории.",
     "Убери мат и тяжёлую брань: замени на нейтральные слова или лёгкие междометия («блин», «чёрт», «капец»), без новых оскорблений.",
     "Полностью убери сексуальные и гендерные оскорбления (включая цитаты из реплики пользователя); их нельзя оставлять даже в кавычках или в устной речи персонажа.",
-    "Сохрани формат ответа (действие/реплика/эмоциональный хвост), если он уже есть.",
+    "Сохрани абзацы и разметку (*действия*, кавычки для речи); не сливай всё в один абзац.",
     "Верни только итоговый отредактированный текст.",
   ].join("\n");
 
@@ -465,20 +522,25 @@ function collapseSlurRemovalArtifacts(text) {
     .replace(/\s*,\s*!/g, "!")
     .replace(/\s*,\s*\./g, ".")
     .replace(/\(\s*\)/g, "")
-    .replace(/\s{2,}/g, " ")
-    .replace(/\s+([.,!?;:])/g, "$1")
+    .replace(/[^\S\n]{2,}/g, " ")
+    .replace(/[ \t]+([.,!?;:])/g, "$1")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+function formatRoleplayReplyStructure(text) {
+  return structureRoleplayParagraphs(text);
 }
 
 /** Финальная очистка ответа пользователю (мат → лёгкие слова; несколько проходов на вложенные случаи). */
 function finalizeBotReplyText(text) {
-  let s = String(text || "").trim();
+  let s = formatRoleplayReplyStructure(String(text || "").trim());
   for (let i = 0; i < 5; i += 1) {
     const next = softenProfanityInText(s);
     if (next === s) break;
     s = next;
   }
-  return collapseSlurRemovalArtifacts(s);
+  return formatRoleplayReplyStructure(collapseSlurRemovalArtifacts(s));
 }
 
 function containsUserAgencyViolation(text, personaName = "") {
@@ -488,8 +550,11 @@ function containsUserAgencyViolation(text, personaName = "") {
   const escapedPersonaName = safePersonaName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
   const patterns = [
+    /\bты\s+(стоишь|сидишь|находишь|чувствуешь|думаешь|видишь|можешь|должен|должна|замер|замерла)\b/i,
     /\bты\s+(сказал|сказала|сделал|сделала|улыбнул[а-я]*|подош[её]л|подошла|взял|взяла|крикнул|крикнула|ответил|ответила|почувствовал|почувствовала)\b/i,
     /\bты\s+(поднял[аи]?сь?|поднялся|поднялась|смотрел[аи]?|смотрела|дернул[аи]?|дернула|покраснел[аи]?|дрожал[аи]?|замолчал[аи]?|отвернул[аи]?сь?|вздохнул[аи]?|вздохнула)\b/i,
+    /\bперед тобой\b/i,
+    /\bвсё,?\s+что\s+(?:ты|находишь)\b/i,
     /\bпользователь\s+(сказал|сказала|сделал|сделала|подош[её]л|подошла|улыбнул[а-я]*)\b/i,
     /\b(?:она|он)\s+(сказал|сказала|сделал|сделала|начала|начал|пош[её]л|пошла|атаковал[а]?|ударил[а]?|отступил[а]?)\b/i,
     /\bтво(?:й|я|и|ё)\s+(голос|взгляд|щеки|щёки|лицо|тело|рук[аи]|пальц[аы]|глаз[а]|губ[ы])\b/i,
@@ -705,9 +770,9 @@ function isNearDuplicateOfRecentAssistant(text, history = []) {
 function buildHardSafeFallbackReply() {
   return [
     "*Я делаю медленный вдох, удерживая взгляд и контролируя каждое движение.*",
-    '"Говори со мной прямо. Я отвечу честно и в своей манере, но не стану приписывать тебе того, чего ты не делала."',
+    "«Говори со мной прямо. Я отвечу честно и в своей манере, но не стану приписывать тебе того, чего ты не делала.»",
     "*Я сохраняю дистанцию и жду твоего следующего шага, внимательно отслеживая каждую деталь ситуации.*",
-  ].join("\n");
+  ].join("\n\n");
 }
 
 function isReplyAcceptable(text, botName, personaName, history = []) {
@@ -745,7 +810,7 @@ async function enforceReplyQuality(
       "1) Пиши ТОЛЬКО в третьем лице: персонаж как 'он/она' или по имени; не используй 'я/мне/мой'.",
       "2) Не пиши за пользователя и не описывай его действия как факт.",
       `2.1) Не используй имя персоны пользователя "${String(personaName || "").trim()}" в связке с глаголами действий.`,
-      "3) Формат: связный естественный текст на русском, без обязательного шаблона в 3 строки.",
+      "3) Формат: короткие абзацы через пустую строку; *действия*; речь в кавычках; не один сплошной абзац.",
       `3.1) Обязательно дай прямую реакцию на последнюю реплику пользователя: "${lastUserMessage || "..."}.`,
       "3.2) Первые 1-2 предложения должны логически отвечать именно на неё.",
       "4) Исправь русский язык: орфография, пунктуация, логика.",
@@ -781,7 +846,7 @@ async function enforceReplyQuality(
       `Последняя реплика пользователя: "${lastUserMessage || "..."}".`,
       "Сначала отреагируй на неё по смыслу, затем развивай сцену.",
       "Другие слова, образы и детали — не копируй и не перефразируй дословно предыдущие черновики.",
-      "Формат: обычное связное повествование в 3-м лице, без обязательного деления на 3 строки.",
+      "Формат: абзацы через пустую строку, *действия*, речь в кавычках; 3-е лицо о персонаже.",
       "Только третье лицо о персонаже; не пиши за пользователя.",
       "Строго без откровенного секса, порнографии и графического насилия — только контент для широкой аудитории.",
       "Без мата и без сексуальных/гендерных оскорблений; не повторяй оскорбления из реплики пользователя.",
@@ -856,25 +921,33 @@ async function generateBotReply({
   }
   const customPrompt = String(runtimeConfig?.custom_prompt || "").trim();
   const usingProxy = Boolean(String(runtimeConfig?.proxy_url || "").trim());
+  const chatModel =
+    String(runtimeConfig?.model || "").trim() || OLLAMA_MODEL;
 
-  const messages = [];
-  messages.push({
-    role: "system",
-    content: buildSystemPrompt(botSystemPrompt, personaPrompt, botName),
-  });
-  if (customPrompt) {
-    messages.push({
-      role: "system",
-      content: `Дополнительные инструкции прокси:\n${customPrompt}`,
-    });
+  const messages = buildMessagesForLlmApi(
+    botSystemPrompt,
+    personaPrompt,
+    botName,
+    customPrompt,
+    history,
+  );
+
+  // Chutes / OpenRouter: как Janitor — один запрос, без цепочки переписываний (иначе 429)
+  if (usingProxy) {
+    const reply = await requestOllamaChat(
+      chatModel,
+      messages,
+      samplingOptions,
+      runtimeConfig,
+    );
+    return finalizeBotReplyText(reply);
   }
-  messages.push(...history);
 
   try {
-    let reply = await requestOllamaChat(OLLAMA_MODEL, messages, samplingOptions, runtimeConfig);
-    reply = await polishRussianReply(OLLAMA_MODEL, messages, reply, samplingOptions, runtimeConfig);
+    let reply = await requestOllamaChat(chatModel, messages, samplingOptions, runtimeConfig);
+    reply = await polishRussianReply(chatModel, messages, reply, samplingOptions, runtimeConfig);
     reply = await enforceReplyQuality(
-      OLLAMA_MODEL,
+      chatModel,
       messages,
       reply,
       botName,
@@ -895,25 +968,25 @@ async function generateBotReply({
       {
         role: "user",
         content:
-          "Сделай ответ значительно более развернутым и атмосферным: добавь эмоции, реакцию персонажа, детали сцены и плавное развитие диалога. Не сокращай. Не добавляй текст и действия за пользователя. Без откровенного секса, порнографии и жестокого насилия. Без мата и без сексуальных/гендерных оскорблений — не повторяй брань из реплики пользователя; только лёгкие междометия при необходимости.",
+          "Сделай ответ значительно более развернутым и атмосферным: добавь эмоции, реакцию персонажа, детали сцены и плавное развитие диалога. Разбей на короткие абзацы через пустую строку: *действия*, речь в кавычках, мысли в *звёздочках*. Не сокращай. Не добавляй текст и действия за пользователя. Без откровенного секса, порнографии и жестокого насилия. Без мата и без сексуальных/гендерных оскорблений — не повторяй брань из реплики пользователя; только лёгкие междометия при необходимости.",
       },
     ];
 
     const expandedDraft = await requestOllamaChat(
-      OLLAMA_MODEL,
+      chatModel,
       expansionMessages,
       samplingOptions,
       runtimeConfig,
     );
     const polishedExpandedDraft = await polishRussianReply(
-      OLLAMA_MODEL,
+      chatModel,
       messages,
       expandedDraft,
       samplingOptions,
       runtimeConfig,
     );
     const expanded = await enforceReplyQuality(
-      OLLAMA_MODEL,
+      chatModel,
       messages,
       polishedExpandedDraft,
       botName,
@@ -926,7 +999,7 @@ async function generateBotReply({
     if (usingProxy) {
       throw primaryError;
     }
-    if (!OLLAMA_FALLBACK_MODEL || OLLAMA_FALLBACK_MODEL === OLLAMA_MODEL) {
+    if (!OLLAMA_FALLBACK_MODEL || OLLAMA_FALLBACK_MODEL === chatModel) {
       throw primaryError;
     }
 

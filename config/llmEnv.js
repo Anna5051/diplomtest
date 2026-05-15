@@ -2,6 +2,14 @@ const fs = require("fs");
 const path = require("path");
 
 const SECRETS_KEY_FILE = path.resolve(__dirname, "secrets", "llm-api-key.txt");
+const OLLAMA_HEALTH_TTL_MS = Number(process.env.OLLAMA_HEALTH_TTL_MS) || 20000;
+
+let ollamaHealthCache = {
+  ready: false,
+  checkedAt: 0,
+  models: [],
+  error: null,
+};
 
 function readApiKeyFromSecretsFile() {
   try {
@@ -23,7 +31,22 @@ function resolveLlmApiKey() {
   );
 }
 
-function getServerLlmRuntimeConfig() {
+/** Встроенная модель для всех пользователей: ollama (бесплатно) | cloud (API из .env) */
+function getBuiltinLlmMode() {
+  const mode = String(process.env.BUILTIN_LLM_MODE || "ollama").trim().toLowerCase();
+  return mode === "cloud" ? "cloud" : "ollama";
+}
+
+function getOllamaBaseUrl() {
+  return String(process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").trim();
+}
+
+function getOllamaDefaultModel() {
+  return String(process.env.OLLAMA_MODEL || "qwen2.5:3b").trim();
+}
+
+/** Облачный API из .env (Chutes, OpenRouter и т.д.) — не для встроенной, если режим ollama */
+function getServerCloudLlmRuntimeConfig() {
   const proxyUrl = String(process.env.LLM_PROXY_URL || "").trim();
   if (!proxyUrl) return {};
   return {
@@ -36,23 +59,17 @@ function getServerLlmRuntimeConfig() {
   };
 }
 
-function getLlmPublicStatus() {
-  const server = getServerLlmRuntimeConfig();
-  if (server.proxy_url) {
-    return {
-      mode: "cloud",
-      ready: Boolean(server.api_key),
-      model: server.model || null,
-      provider: detectCloudProvider(server.proxy_url),
-    };
+/** Конфиг «Встроенная» в чате: пустой proxy_url → запрос в Ollama на сервере */
+function getBuiltinLlmRuntimeConfig() {
+  if (getBuiltinLlmMode() === "cloud") {
+    return getServerCloudLlmRuntimeConfig();
   }
-  return {
-    mode: "ollama",
-    ready: true,
-    model: process.env.OLLAMA_MODEL || "qwen2.5:3b",
-    provider: "ollama",
-    base_url: process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434",
-  };
+  return {};
+}
+
+/** @deprecated — используйте getBuiltinLlmRuntimeConfig / getServerCloudLlmRuntimeConfig */
+function getServerLlmRuntimeConfig() {
+  return getBuiltinLlmRuntimeConfig();
 }
 
 function detectCloudProvider(proxyUrl) {
@@ -66,6 +83,113 @@ function detectCloudProvider(proxyUrl) {
   return "custom";
 }
 
+async function refreshOllamaHealth() {
+  const baseUrl = getOllamaBaseUrl();
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 6000);
+    const response = await fetch(`${baseUrl}/api/tags`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(data.error || `HTTP ${response.status}`);
+    }
+    const items = Array.isArray(data?.models) ? data.models : [];
+    const models = items
+      .map((item) => {
+        const id = String(item?.name || item?.model || "").trim();
+        if (!id) return null;
+        return { id, name: id };
+      })
+      .filter(Boolean);
+    const defaultModel = getOllamaDefaultModel();
+    const hasDefault = models.some((m) => m.id === defaultModel);
+    if (!hasDefault && defaultModel) {
+      models.unshift({ id: defaultModel, name: defaultModel });
+    }
+    ollamaHealthCache = {
+      ready: true,
+      checkedAt: Date.now(),
+      models,
+      error: null,
+    };
+  } catch (err) {
+    ollamaHealthCache = {
+      ready: false,
+      checkedAt: Date.now(),
+      models: [],
+      error: err?.message || "Ollama недоступна",
+    };
+  }
+  return ollamaHealthCache;
+}
+
+async function getOllamaHealth() {
+  if (Date.now() - ollamaHealthCache.checkedAt > OLLAMA_HEALTH_TTL_MS) {
+    await refreshOllamaHealth();
+  }
+  return ollamaHealthCache;
+}
+
+function getLlmPublicStatus() {
+  if (getBuiltinLlmMode() === "cloud") {
+    const server = getServerCloudLlmRuntimeConfig();
+    if (server.proxy_url) {
+      return {
+        mode: "cloud",
+        builtin_mode: "cloud",
+        ready: Boolean(server.api_key),
+        model: server.model || null,
+        provider: detectCloudProvider(server.proxy_url),
+        free: false,
+        user_install_required: false,
+        description:
+          "Облачная модель на сервере Charitor. Пользователям ключ не нужен.",
+      };
+    }
+  }
+
+  return {
+    mode: "ollama",
+    builtin_mode: "ollama",
+    ready: ollamaHealthCache.ready,
+    model: getOllamaDefaultModel(),
+    provider: "ollama",
+    base_url: getOllamaBaseUrl(),
+    free: true,
+    user_install_required: false,
+    description:
+      "Бесплатная модель на сервере Charitor (Ollama). На компьютере пользователя ничего ставить не нужно.",
+    ollama_error: ollamaHealthCache.ready ? null : ollamaHealthCache.error,
+  };
+}
+
+/** Подставляет ключ и заголовки Chutes с сервера, если в браузере прокси без ключа */
+function enrichCloudProxyRuntimeConfig(cfg) {
+  if (!cfg || !String(cfg.proxy_url || "").trim()) return cfg || {};
+  const out = { ...cfg };
+  const url = String(out.proxy_url || "").toLowerCase();
+
+  if (!String(out.api_key || "").trim()) {
+    const serverKey = resolveLlmApiKey();
+    if (serverKey) out.api_key = serverKey;
+  }
+
+  const cloudDefaults = getServerCloudLlmRuntimeConfig();
+  if (url.includes("chutes.ai") || url.includes("openrouter.ai")) {
+    if (!out.http_referer && cloudDefaults.http_referer) {
+      out.http_referer = cloudDefaults.http_referer;
+    }
+    if (!out.x_title && cloudDefaults.x_title) {
+      out.x_title = cloudDefaults.x_title;
+    }
+  }
+
+  return out;
+}
+
 function applyModelOverrideToRuntimeConfig(runtimeConfig, modelOverride) {
   const cfg = { ...runtimeConfig };
   const model = String(modelOverride || "").trim();
@@ -73,8 +197,34 @@ function applyModelOverrideToRuntimeConfig(runtimeConfig, modelOverride) {
   return cfg;
 }
 
-async function fetchAvailableLlmModels() {
-  const server = getServerLlmRuntimeConfig();
+const CHUTES_PROXY_URL = "https://llm.chutes.ai/v1/chat/completions";
+
+const CHUTES_PROXY_PRESETS_FALLBACK = [
+  "Qwen/Qwen3-32B-TEE",
+  "google/gemma-4-31B-turbo-TEE",
+  "zai-org/GLM-5.1-TEE",
+  "moonshotai/Kimi-K2.5-TEE",
+  "MiniMaxAI/MiniMax-M2.5-TEE",
+  "deepseek-ai/DeepSeek-V3.2-TEE",
+  "Qwen/Qwen3.5-397B-A17B-TEE",
+  "zai-org/GLM-5-Turbo",
+  "moonshotai/Kimi-K2.6-TEE",
+  "zai-org/GLM-5-TEE",
+  "unsloth/Mistral-Nemo-Instruct-2407-TEE",
+  "Qwen/Qwen3.6-27B-TEE",
+  "Qwen/Qwen2.5-Coder-32B-Instruct-TEE",
+  "Qwen/Qwen3-235B-A22B-Thinking-2507",
+];
+
+function formatChutesProxyPresetName(modelId) {
+  const id = String(modelId || "").trim();
+  if (!id) return "Chutes";
+  const tail = id.includes("/") ? id.split("/").pop() : id;
+  return `Chutes · ${tail.replace(/-TEE$/i, "")}`;
+}
+
+async function fetchCloudLlmModels() {
+  const server = getServerCloudLlmRuntimeConfig();
   if (!server.proxy_url || !server.api_key) return [];
 
   const provider = detectCloudProvider(server.proxy_url);
@@ -122,30 +272,79 @@ async function fetchAvailableLlmModels() {
   return [];
 }
 
-function logLlmModeAtStartup() {
-  const status = getLlmPublicStatus();
-  if (status.mode === "cloud") {
+async function fetchChutesProxyPresets() {
+  const fromApi = await fetchCloudLlmModels();
+  const modelIds = fromApi.length
+    ? fromApi.map((item) => item.id)
+    : CHUTES_PROXY_PRESETS_FALLBACK;
+  const unique = [...new Set(modelIds.map((id) => String(id || "").trim()).filter(Boolean))];
+  return unique.map((model) => ({
+    model,
+    name: formatChutesProxyPresetName(model),
+    proxyUrl: CHUTES_PROXY_URL,
+    provider: "chutes",
+  }));
+}
+
+async function fetchAvailableLlmModels() {
+  if (getBuiltinLlmMode() === "ollama") {
+    const health = await getOllamaHealth();
+    return health.models || [];
+  }
+  return fetchCloudLlmModels();
+}
+
+async function logLlmModeAtStartup() {
+  const mode = getBuiltinLlmMode();
+  if (mode === "cloud") {
+    const status = getLlmPublicStatus();
     if (!status.ready) {
       console.warn(
-        "LLM: облачный API задан, но ключ пустой. Добавьте LLM_API_KEY в .env или положите ключ в config/secrets/llm-api-key.txt",
+        "LLM (встроенная=cloud): API задан, но ключ пустой. Добавьте LLM_API_KEY в .env",
       );
       console.warn(`     URL: ${process.env.LLM_PROXY_URL}`);
       return;
     }
     console.log(
-      `LLM: облачный API (${status.provider}), модель: ${status.model || "(LLM_MODEL)"}`,
+      `LLM (встроенная=cloud): ${status.provider}, модель: ${status.model || "(LLM_MODEL)"}`,
     );
     return;
   }
-  console.log(`LLM: Ollama ${status.base_url}, модель: ${status.model}`);
+
+  await refreshOllamaHealth();
+  const baseUrl = getOllamaBaseUrl();
+  const model = getOllamaDefaultModel();
+  if (ollamaHealthCache.ready) {
+    const count = ollamaHealthCache.models.length;
+    console.log(
+      `LLM (встроенная=ollama, бесплатно): ${baseUrl}, модель: ${model}${count ? `, в каталоге: ${count}` : ""}`,
+    );
+    console.log("     Пользователям Ollama на ПК не нужна — только на этом сервере.");
+    return;
+  }
+  console.warn(`LLM (встроенная=ollama): сервис недоступен (${baseUrl})`);
+  console.warn(`     ${ollamaHealthCache.error || "запустите: ollama serve"}`);
+  console.warn(`     затем: ollama pull ${model}`);
 }
 
 module.exports = {
   SECRETS_KEY_FILE,
+  getBuiltinLlmMode,
+  getBuiltinLlmRuntimeConfig,
   getServerLlmRuntimeConfig,
+  getServerCloudLlmRuntimeConfig,
   getLlmPublicStatus,
   logLlmModeAtStartup,
   resolveLlmApiKey,
   applyModelOverrideToRuntimeConfig,
   fetchAvailableLlmModels,
+  fetchChutesProxyPresets,
+  CHUTES_PROXY_URL,
+  formatChutesProxyPresetName,
+  refreshOllamaHealth,
+  getOllamaHealth,
+  getOllamaBaseUrl,
+  getOllamaDefaultModel,
+  enrichCloudProxyRuntimeConfig,
+  resolveLlmApiKey,
 };

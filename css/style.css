@@ -165,62 +165,7 @@ nav {
 }
 
 .features {
-  padding: 30px 0 110px;
-}
-
-.info-sections {
-  padding: 0 0 70px;
-}
-
-.info-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.info-card {
-  border: 1px solid rgba(190, 200, 255, 0.22);
-  border-radius: 16px;
-  padding: 16px;
-  background: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.07),
-    rgba(255, 255, 255, 0.02)
-  );
-}
-
-.info-card h3 {
-  margin: 0 0 8px;
-  color: #fff;
-  font-size: 20px;
-}
-
-.info-card h3 a {
-  color: inherit;
-  text-decoration: none;
-}
-
-.info-card h3 a:hover {
-  text-decoration: underline;
-}
-
-.info-card-more {
-  display: inline-block;
-  margin-top: 10px;
-  font-size: 14px;
-  color: #c9bfff;
-  text-decoration: none;
-}
-
-.info-card-more:hover {
-  text-decoration: underline;
-}
-
-.info-card p {
-  margin: 0;
-  color: rgba(255, 255, 255, 0.88);
-  line-height: 1.45;
-  font-size: 15px;
+  padding: 30px 0 80px;
 }
 
 .landing-footer {
@@ -269,31 +214,23 @@ nav {
   background: linear-gradient(135deg, #2a7adf, #2cb6d5);
 }
 
-.footer-links {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(180px, 1fr));
-  gap: 30px;
-}
-
-.footer-col {
+.landing-footer-nav {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px 18px;
+  max-width: 720px;
 }
 
-.footer-col h4 {
-  margin: 0 0 4px;
-  color: #fff;
-  font-size: 18px;
-}
-
-.footer-col a {
+.landing-footer-nav a {
   color: rgba(255, 255, 255, 0.86);
   text-decoration: none;
   font-size: 14px;
+  line-height: 1.35;
 }
 
-.footer-col a:hover {
+.landing-footer-nav a:hover {
   color: #fff;
   text-decoration: underline;
 }
@@ -439,17 +376,13 @@ nav {
     font-size: 17px;
   }
 
-  .info-grid {
-    grid-template-columns: 1fr;
-  }
-
   .footer-content {
     flex-direction: column;
   }
 
-  .footer-links {
-    grid-template-columns: 1fr;
-    gap: 16px;
+  .landing-footer-nav {
+    justify-content: flex-start;
+    max-width: none;
   }
 
   .footer-brand {
