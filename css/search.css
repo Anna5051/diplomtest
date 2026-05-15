@@ -614,6 +614,21 @@ header.search-topbar .topbar-right {
   font-size: 12px;
 }
 
+.character-author {
+  margin: 4px 0 0;
+}
+
+.author-link {
+  color: #dbd4ff;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.author-link:hover {
+  color: #fff;
+  text-decoration: underline;
+}
+
 .character-story {
   margin: 5px 0 8px;
   color: #f0eaff;

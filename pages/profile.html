@@ -388,6 +388,82 @@
         return div.innerHTML;
       }
 
+      function normalizeTagKey(raw) {
+        return String(raw ?? "")
+          .trim()
+          .normalize("NFKC")
+          .replace(/^#+/g, "")
+          .replace(/\+/g, "_")
+          .replace(/,/g, "_")
+          .replace(/\s+/g, "_")
+          .replace(/_+/g, "_")
+          .toLowerCase();
+      }
+
+      function translateTag(tag) {
+        const raw = String(tag || "").trim();
+        if (!raw) return "";
+        const key = normalizeTagKey(raw);
+        const map = {
+          romance: "Романтика",
+          drama: "Драма",
+          rp: "Ролевые сценарии",
+          dark: "Тёмные сюжеты",
+          dark_fantasy: "Тёмное фэнтези",
+          fantasy: "Фэнтези",
+          anime: "Аниме",
+          adventure: "Приключения",
+          story: "Истории",
+          villain: "Злодеи",
+          hero: "Герои",
+          mystery: "Мистика",
+          magic: "Магия",
+          slowburn: "Медленное развитие",
+          enemies: "От ненависти до любви",
+          oc: "Оригинальные персонажи",
+          scenario: "Сценарные",
+          male: "Мужской POV",
+          female: "Женский POV",
+          nonhuman: "Нелюди",
+          historical: "Исторические",
+          school: "Школьные",
+          office: "Офисные",
+          mafia: "Мафия",
+          detective: "Детектив",
+          vampire: "Вампиры",
+          robot: "Роботы",
+          scifi: "Научная фантастика",
+          "sci-fi": "Научная фантастика",
+          comedy: "Комедия",
+          angst: "Ангст",
+          royalty: "Королевские",
+          monster: "Монстры",
+          assistant: "Ассистенты",
+          beginning: "Для новичков",
+          music: "Музыкальные",
+          cyberpunk: "Киберпанк",
+          gothic: "Готика",
+          ru: "Русский",
+          demon: "Демоны",
+          демон: "Демоны",
+          демоны: "Демоны",
+        };
+        if (map[key]) return map[key];
+        if (/[а-яё]/iu.test(raw)) {
+          return raw.charAt(0).toUpperCase() + raw.slice(1);
+        }
+        return raw;
+      }
+
+      function formatBotTags(tagsString) {
+        if (!tagsString || !String(tagsString).trim()) return [];
+        return String(tagsString)
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean)
+          .slice(0, 4);
+      }
+
       function getFollowersStorageKey(profile) {
         return `profileFollowers_${getAuthorStorageKey(profile)}`;
       }
@@ -795,6 +871,11 @@
             Number(bot.creator_id || viewedProfile?.id || 0) === Number(savedUser.id) &&
             isRestrictedBot;
 
+          const tags = formatBotTags(bot.tags);
+          const tagsHtml = tags.length
+            ? tags.map((tag) => `<span>${escapeHtml(translateTag(tag))}</span>`).join("")
+            : `<span>Нет тегов</span>`;
+
           card.innerHTML = `
             <div class="created-bot-cover-wrap">
               <a href="/pages/bot.html?id=${bot.id}" class="created-bot-cover">
@@ -810,6 +891,7 @@
                   : ""
               }
               <a href="${authorLink}" class="created-bot-author">@${escapeHtml(authorName)}</a>
+              <div class="created-bot-tags">${tagsHtml}</div>
               <p>${escapeHtml(bot.short_description || "Описание отсутствует")}</p>
               <div class="created-bot-actions">
                 ${

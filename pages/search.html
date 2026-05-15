@@ -601,6 +601,10 @@
         const card = document.createElement("article");
         card.className = "character-card";
         const storyDescription = getStoryText(bot);
+        const authorName = bot.author_name || bot.author || "unknown";
+        const authorId = bot.creator_id || bot.author_id || "";
+        const authorIdPart = authorId ? `authorId=${encodeURIComponent(authorId)}&` : "";
+        const authorProfileUrl = `/pages/profile.html?${authorIdPart}username=${encodeURIComponent(authorName)}`;
 
         card.innerHTML = `
           <div class="character-image-wrap">
@@ -622,7 +626,9 @@
                 <h3>
                   <a href="${getBotUrl(bot)}">${escapeHtml(bot.name || "Без имени")}</a>
                 </h3>
-                <p>@${escapeHtml(bot.author_name || bot.author || "unknown")}</p>
+                <p class="character-author">
+                  <a href="${authorProfileUrl}" class="author-link">@${escapeHtml(authorName)}</a>
+                </p>
                 <p class="character-story">
                   ${escapeHtml(storyDescription || "Сюжет пока не добавлен")}
                 </p>

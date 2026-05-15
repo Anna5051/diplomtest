@@ -37,13 +37,11 @@
       </div>
 
       <div class="history-controls">
-        <select id="sortSelect">
+        <select id="sortSelect" class="history-sort-select">
           <option value="count">Количество чатов</option>
           <option value="latest">Недавние</option>
           <option value="oldest">Давние</option>
         </select>
-
-        <button id="refreshBtn" type="button">Обновить</button>
       </div>
     </section>
 
@@ -89,7 +87,6 @@
     const sortSelect = document.getElementById("sortSelect");
     const chatsGrid = document.getElementById("chatsGrid");
     const statusBox = document.getElementById("statusBox");
-    const refreshBtn = document.getElementById("refreshBtn");
     const topAvatar = document.getElementById("topAvatar");
 
     let chats = [];
@@ -244,7 +241,6 @@
       }
     });
     sortSelect.addEventListener("change", applyFilters);
-    refreshBtn.addEventListener("click", loadChats);
 
     loadChats();
   </script>

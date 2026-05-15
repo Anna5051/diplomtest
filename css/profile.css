@@ -238,12 +238,21 @@ body {
 }
 
 .edit-emoji-btn {
-  width: 46px;
-  min-width: 46px;
-  padding: 0;
-  border-color: rgba(205, 186, 255, 0.52);
-  background: linear-gradient(135deg, rgba(98, 75, 205, 0.9), rgba(156, 98, 220, 0.88));
-  box-shadow: 0 10px 22px rgba(84, 52, 178, 0.42);
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  color: rgba(235, 228, 255, 0.92);
+}
+
+.edit-emoji-btn:hover {
+  transform: none;
+  box-shadow: none;
+  color: #fff;
+  background: transparent;
 }
 
 #toggleEditBtn {
@@ -254,8 +263,8 @@ body {
 }
 
 .edit-toggle-icon {
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   display: block;
 }
 
@@ -414,6 +423,47 @@ body {
   font-size: 13px;
   color: #dbd4ff;
   text-decoration: none;
+}
+
+.created-bot-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 8px;
+}
+
+.created-bot-tags span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.created-bot-tags span:nth-child(6n + 1) {
+  border: 1px solid rgba(255, 182, 103, 0.38);
+  background: rgba(85, 58, 38, 0.62);
+  color: #ffcf9a;
+}
+
+.created-bot-tags span:nth-child(6n + 2) {
+  border: 1px solid rgba(255, 145, 201, 0.38);
+  background: rgba(82, 42, 68, 0.58);
+  color: #ffc8e4;
+}
+
+.created-bot-tags span:nth-child(6n + 3) {
+  border: 1px solid rgba(171, 160, 255, 0.42);
+  background: rgba(52, 48, 98, 0.62);
+  color: #e2dcff;
+}
+
+.created-bot-tags span:nth-child(6n + 4) {
+  border: 1px solid rgba(120, 209, 255, 0.4);
+  background: rgba(36, 72, 98, 0.58);
+  color: #bfe9ff;
 }
 
 .created-bot-actions {

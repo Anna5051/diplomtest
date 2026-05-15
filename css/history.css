@@ -114,20 +114,38 @@ body {
   gap: 10px;
 }
 
-.history-controls select,
-.history-controls button {
-  min-height: 44px;
+.history-sort-select {
+  min-height: 42px;
+  min-width: 200px;
+  padding: 0 36px 0 12px;
   border-radius: 12px;
-  border: 1px solid rgba(169, 151, 255, 0.45);
-  background: rgba(35, 30, 75, 0.78);
+  border: 1px solid rgba(169, 151, 255, 0.36);
+  background:
+    linear-gradient(180deg, rgba(58, 45, 124, 0.92), rgba(34, 29, 86, 0.92));
   color: #fff;
-  padding: 0 14px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  appearance: none;
+  background-image:
+    linear-gradient(180deg, rgba(58, 45, 124, 0.92), rgba(34, 29, 86, 0.92)),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23f0eaff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat, no-repeat;
+  background-position: 0 0, right 11px center;
+  background-size: auto, 14px;
   outline: none;
 }
 
-.history-controls button {
-  cursor: pointer;
+.history-sort-select:focus {
+  border-color: rgba(214, 199, 255, 0.86);
+  box-shadow:
+    0 0 0 2px rgba(181, 152, 255, 0.22),
+    0 0 12px rgba(149, 103, 255, 0.24);
+}
+
+.history-sort-select option {
+  background: #211a4e;
+  color: #fff;
 }
 
 .status-box {
@@ -294,8 +312,7 @@ body {
     flex-direction: column;
   }
 
-  .history-controls select,
-  .history-controls button {
+  .history-sort-select {
     width: 100%;
   }
 
