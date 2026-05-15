@@ -1,3 +1,4 @@
 .env
 .messages-content.key
+config/secrets/llm-api-key.txt
 node_modules/

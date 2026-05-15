@@ -121,6 +121,13 @@ const {
   FILTERED_BOT_MESSAGE_PLACEHOLDER,
 } = require("./aiChat");
 const {
+  getServerLlmRuntimeConfig,
+  getLlmPublicStatus,
+  logLlmModeAtStartup,
+  applyModelOverrideToRuntimeConfig,
+  fetchAvailableLlmModels,
+} = require("./llmEnv");
+const {
   encryptMessageContentForDb,
   decryptMessageContentFromDb,
   decryptMessageRowsForApi,
@@ -434,6 +441,85 @@ function normalizeRuntimeConfigFromBodyProxy(proxy) {
     custom_prompt: String(proxy.custom_prompt || proxy.customPrompt || "").trim(),
   };
 }
+
+function applyLlmSettingsToRuntimeConfig(cfg, llmSettings) {
+  if (!llmSettings || typeof llmSettings !== "object") return cfg;
+  const out = { ...cfg };
+  const userPrompt = String(llmSettings.custom_prompt || "").trim();
+  if (userPrompt) {
+    out.custom_prompt = out.custom_prompt
+      ? `${out.custom_prompt}\n\n${userPrompt}`
+      : userPrompt;
+  }
+  const temperature = Number(llmSettings.temperature);
+  if (Number.isFinite(temperature)) {
+    out.temperature = Math.min(1.2, Math.max(0, temperature));
+  }
+  const topP = Number(llmSettings.top_p ?? llmSettings.topP);
+  if (Number.isFinite(topP)) {
+    out.top_p = Math.min(1, Math.max(0.05, topP));
+  }
+  return out;
+}
+
+function resolveRuntimeConfig(bodyProxy, bodyLlmModel, bodyLlmSettings) {
+  const modelOverride = String(bodyLlmModel || "").trim();
+  const fromBody = normalizeRuntimeConfigFromBodyProxy(bodyProxy);
+  let cfg;
+  if (fromBody.proxy_url) {
+    cfg =
+      modelOverride && !fromBody.model
+        ? applyModelOverrideToRuntimeConfig(fromBody, modelOverride)
+        : fromBody;
+  } else {
+    const serverCfg = getServerLlmRuntimeConfig();
+    cfg = modelOverride
+      ? applyModelOverrideToRuntimeConfig(serverCfg, modelOverride)
+      : serverCfg;
+  }
+  return applyLlmSettingsToRuntimeConfig(cfg, bodyLlmSettings);
+}
+
+function rejectIfCloudLlmNotReady(res, bodyProxy) {
+  const fromBody = normalizeRuntimeConfigFromBodyProxy(bodyProxy);
+  if (fromBody.proxy_url) return false;
+
+  const status = getLlmPublicStatus();
+  if (status.mode === "cloud" && !status.ready) {
+    res.status(503).json({
+      message:
+        "Облачная модель не настроена: укажите LLM_API_KEY в .env или положите ключ в config/secrets/llm-api-key.txt (Groq: console.groq.com/keys)",
+    });
+    return true;
+  }
+  return false;
+}
+
+app.get("/api/llm-status", (req, res) => {
+  const status = getLlmPublicStatus();
+  res.json({
+    ...status,
+    default_model: status.model,
+    models_supported: status.mode === "cloud" && status.ready,
+  });
+});
+
+app.get("/api/llm-models", async (req, res) => {
+  try {
+    const status = getLlmPublicStatus();
+    if (status.mode !== "cloud" || !status.ready) {
+      return res.json({ models: [], default_model: status.model || null });
+    }
+    const models = await fetchAvailableLlmModels();
+    res.json({
+      models,
+      default_model: status.model || null,
+      provider: status.provider || null,
+    });
+  } catch {
+    res.status(500).json({ message: "Не удалось загрузить список моделей", models: [] });
+  }
+});
 
 function requireUserIdFromQuery(req, res) {
   const userId = Number(req.query.user_id);
@@ -1710,7 +1796,11 @@ app.get("/chat/:chatId", (req, res) => {
 app.post("/chat/:chatId/message", (req, res) => {
   const { chatId } = req.params;
   const { text, persona_prompt, persona_name, proxy } = req.body;
-  const runtimeConfig = normalizeRuntimeConfigFromBodyProxy(proxy);
+  const runtimeConfig = resolveRuntimeConfig(
+    proxy,
+    req.body?.llm_model,
+    req.body?.llm_settings,
+  );
   const normalizedText = String(text || "").trim();
 
   if (!normalizedText) {
@@ -1751,6 +1841,8 @@ app.post("/chat/:chatId/message", (req, res) => {
     }
 
     const chat = chatRows[0];
+    if (rejectIfCloudLlmNotReady(res, req.body?.proxy)) return;
+
     const policyHit = classifyUserPolicyViolation(normalizedText);
     const policyViolationFlag = policyHit ? 1 : 0;
 
@@ -2106,11 +2198,16 @@ app.post("/chat/:chatId/rewind-to/:messageId", async (req, res) => {
 app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
   const { chatId, messageId } = req.params;
   const { user_id, persona_prompt, persona_name, proxy, swipe } = req.body;
-  const runtimeConfig = normalizeRuntimeConfigFromBodyProxy(proxy);
+  const runtimeConfig = resolveRuntimeConfig(
+    proxy,
+    req.body?.llm_model,
+    req.body?.llm_settings,
+  );
 
   if (!user_id) {
     return res.status(400).json({ message: "Не указан пользователь" });
   }
+  if (rejectIfCloudLlmNotReady(res, req.body?.proxy)) return;
 
   try {
     const ownedChat = await getOwnedChat(chatId, user_id);
@@ -2252,11 +2349,16 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
 app.post("/chat/:chatId/continue", async (req, res) => {
   const { chatId } = req.params;
   const { user_id, persona_prompt, persona_name, proxy } = req.body;
-  const runtimeConfig = normalizeRuntimeConfigFromBodyProxy(proxy);
+  const runtimeConfig = resolveRuntimeConfig(
+    proxy,
+    req.body?.llm_model,
+    req.body?.llm_settings,
+  );
 
   if (!user_id) {
     return res.status(400).json({ message: "Не указан пользователь" });
   }
+  if (rejectIfCloudLlmNotReady(res, req.body?.proxy)) return;
 
   try {
     const ownedChat = await getOwnedChat(chatId, user_id);
@@ -3404,6 +3506,7 @@ function startHttpServer(port) {
         console.error("БД: ошибка —", dbErr.message);
       } else {
         console.log("БД: подключение установлено");
+        logLlmModeAtStartup();
         ensurePersonaRoleColumn();
         ensureUserBlockedColumn();
         ensureBotBlockedColumn();

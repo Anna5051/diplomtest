@@ -4,7 +4,8 @@
   "description": "Diplom project",
   "main": "config/server.js",
   "scripts": {
-    "start": "node config/server.js"
+    "start": "node config/server.js",
+    "test:llm": "node scripts/test-llm.js"
   },
   "author": "",
   "license": "ISC",

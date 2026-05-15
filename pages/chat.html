@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Чат — Charitor.ai</title>
   <link rel="stylesheet" href="/css/general.css" />
-  <link rel="stylesheet" href="/css/chat.css?v=user-tight-wrap" />
+  <link rel="stylesheet" href="/css/chat.css?v=charitor-drawer-overlay" />
   <script src="/js/notifications.js" defer></script>
 </head>
 
@@ -124,24 +124,36 @@
 
     <div class="chat-input-wrap">
       <form class="chat-input-area" id="chatForm">
-        <div class="chat-input-row">
-          <textarea
-            id="chatInput"
-            placeholder="Введите сообщение..."
-            rows="3"
-          ></textarea>
-          <button type="submit" class="send-btn" id="sendBtn" aria-label="Отправить">
-            ➤
-          </button>
+        <textarea
+          id="chatInput"
+          placeholder="Enter — отправить, Shift+Enter — новая строка"
+          rows="2"
+        ></textarea>
+        <div class="chat-input-footer">
           <button
             type="button"
-            class="ai-stop-btn"
-            id="aiStopBtn"
-            title="Остановить генерацию"
-            aria-label="Остановить генерацию"
+            class="chat-input-persona"
+            id="chatInputPersonaBtn"
+            title="Выбрать персону"
           >
-            <span class="ai-stop-icon" aria-hidden="true"></span>
+            <img id="chatInputPersonaAvatar" src="/img/icon.svg" alt="" />
+            <span id="chatInputPersonaName">Персона</span>
+            <span class="chat-input-persona-chevron" aria-hidden="true">▾</span>
           </button>
+          <div class="chat-input-actions">
+            <button
+              type="button"
+              class="ai-stop-btn"
+              id="aiStopBtn"
+              title="Остановить генерацию"
+              aria-label="Остановить генерацию"
+            >
+              <span class="ai-stop-icon" aria-hidden="true"></span>
+            </button>
+            <button type="submit" class="send-btn" id="sendBtn" aria-label="Отправить">
+              <span aria-hidden="true">↑</span>
+            </button>
+          </div>
         </div>
       </form>
     </div>
@@ -149,39 +161,139 @@
 
   <div id="pageToast" class="page-toast hidden" role="status" aria-live="polite"></div>
 
-  <div id="proxyModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="proxyModalTitle">
-    <div class="modal-card proxy-modal-card">
-      <div class="modal-head">
+  <aside
+    id="proxyModal"
+    class="api-settings-drawer"
+    role="dialog"
+    aria-modal="false"
+    aria-hidden="true"
+    aria-labelledby="proxyModalTitle"
+  >
+    <div class="api-settings-drawer-inner proxy-modal-card">
+      <div class="modal-head api-settings-drawer-head">
         <h2 id="proxyModalTitle">Настройки API</h2>
-        <button id="closeProxyModalBtn" type="button">×</button>
+        <button id="closeProxyModalBtn" type="button" aria-label="Закрыть">×</button>
       </div>
-      <div class="proxy-modal-body">
-        <div class="proxy-toolbar">
-          <button type="button" class="secondary-btn" id="addProxyConfigBtn">+ Добавить прокси</button>
-          <button type="button" class="ghost-btn" id="useBuiltinModelBtn">Использовать встроенный qwen</button>
-        </div>
-        <div id="proxyConfigsList" class="proxy-configs-list"></div>
+      <nav class="api-settings-tabs-row" aria-label="Разделы настроек API">
+        <button type="button" class="api-settings-tab active" data-api-tab="builtin">Встроенная</button>
+        <button type="button" class="api-settings-tab" data-api-tab="proxy">Прокси</button>
+        <button type="button" class="api-settings-tab" data-api-tab="style">Стиль</button>
+      </nav>
+      <div class="api-settings-scroll">
+        <details class="api-global-prompt" open>
+          <summary>Глобальный промпт</summary>
+          <p class="api-field-hint">
+            Добавляется к каждому ответу бота вместе с пресетом стиля. Пишите коротко: тон, табу, формат реплик.
+          </p>
+          <p class="api-field-hint api-field-hint--example">
+            Пример: «2–4 предложения, нежный тон, без списков, не описывай действия пользователя как факт».
+          </p>
+          <textarea
+            id="globalPromptInput"
+            rows="4"
+            placeholder="Например: романтичный тон, больше эмоций, без грубости…"
+          ></textarea>
+        </details>
+        <div class="api-settings-panels">
+          <section class="api-settings-panel active" data-api-panel="builtin" aria-labelledby="apiPanelBuiltinTitle">
+            <h3 id="apiPanelBuiltinTitle" class="api-panel-title">Встроенная модель сервера</h3>
+            <p class="api-panel-desc" id="builtinPanelDesc">Загрузка…</p>
+            <button type="button" class="secondary-btn api-panel-action" id="useBuiltinModelBtn">Использовать встроенную</button>
+            <div class="llm-models-section">
+              <h4 class="llm-models-title">
+                Модель <span id="llmModelPickerTarget" class="llm-models-target"></span>
+              </h4>
+              <p id="llmModelsHint" class="llm-models-hint">Загрузка списка…</p>
+              <div id="llmModelsPicker" class="llm-models-picker" role="listbox" aria-label="Выбор модели"></div>
+            </div>
+          </section>
 
-        <div class="proxy-form-wrap">
-          <h3 id="proxyFormTitle">Новая конфигурация</h3>
-          <label>Название</label>
-          <input id="proxyNameInput" type="text" placeholder="My Proxy" />
-          <label>Модель</label>
-          <input id="proxyModelInput" type="text" placeholder="gpt-4, qwen..." />
-          <label>Proxy URL</label>
-          <input id="proxyUrlInput" type="text" placeholder="https://proxy.com/v1/chat/completions" />
-          <label>API Key</label>
-          <input id="proxyApiKeyInput" type="password" placeholder="sk-... (optional)" />
-          <label>Custom Prompt</label>
-          <textarea id="proxyPromptInput" rows="4" placeholder="Дополнительные инструкции..."></textarea>
-          <div class="proxy-form-actions">
-            <button type="button" class="ghost-btn" id="cancelProxyEditBtn">Отмена</button>
-            <button type="button" class="secondary-btn" id="saveProxyConfigBtn">Сохранить</button>
-          </div>
+          <section class="api-settings-panel" data-api-panel="proxy" aria-labelledby="apiPanelProxyTitle">
+            <div class="api-section-head">
+              <h3 id="apiPanelProxyTitle" class="api-panel-title">
+                Конфигурации прокси
+                <span id="proxyConfigCount" class="api-config-count"></span>
+              </h3>
+              <div class="api-config-actions">
+                <button type="button" class="api-mini-btn" id="exportProxyBtn" title="Сохранить список прокси в JSON-файл">Экспорт</button>
+                <button type="button" class="api-mini-btn" id="importProxyBtn" title="Загрузить прокси из JSON-файла">Импорт</button>
+                <button type="button" class="api-mini-btn api-mini-btn--primary" id="addProxyConfigBtn">+ Новый</button>
+              </div>
+            </div>
+            <div id="proxyConfigsList" class="proxy-configs-list"></div>
+            <div class="proxy-form-wrap hidden" id="proxyFormSection">
+              <h4 id="proxyFormTitle">Новая конфигурация</h4>
+              <label>Название</label>
+              <p class="api-field-hint">Как будет отображаться в списке (например: «Chutes основной»).</p>
+              <input id="proxyNameInput" type="text" placeholder="Мой прокси" autocomplete="off" />
+              <label>Модель</label>
+              <p class="api-field-hint">Идентификатор модели у провайдера, например <code>Qwen/Qwen3-32B-TEE</code> или <code>gpt-4o</code>.</p>
+              <input id="proxyModelInput" type="text" placeholder="Qwen/Qwen3-32B-TEE" autocomplete="off" />
+              <label>URL прокси</label>
+              <p class="api-field-hint">Адрес API в формате OpenAI: обычно заканчивается на <code>/v1/chat/completions</code>.</p>
+              <input id="proxyUrlInput" type="text" placeholder="https://llm.chutes.ai/v1/chat/completions" autocomplete="off" />
+              <label>Ключ API</label>
+              <p class="api-field-hint">Секретный ключ провайдера. Хранится только в вашем браузере.</p>
+              <input id="proxyApiKeyInput" type="password" placeholder="sk-... или cpk_... (необязательно)" autocomplete="off" />
+              <label>Промпт прокси</label>
+              <p class="api-field-hint">Дополнительные инструкции только для этой конфигурации (поверх глобального промпта).</p>
+              <textarea id="proxyPromptInput" rows="3" placeholder="Например: отвечай короче, больше диалога, меньше описаний…"></textarea>
+              <div class="proxy-form-actions">
+                <button type="button" class="ghost-btn" id="cancelProxyEditBtn">Отмена</button>
+                <button type="button" class="secondary-btn" id="saveProxyConfigBtn">Сохранить прокси</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="api-settings-panel" data-api-panel="style" aria-labelledby="apiPanelStyleTitle">
+            <h3 id="apiPanelStyleTitle" class="api-panel-title">Стиль и генерация</h3>
+            <p class="api-panel-desc">Применяется к следующим сообщениям сразу. «Сохранить» — запомнить в браузере. Чат слева можно использовать без закрытия панели.</p>
+
+            <details class="api-collapsible" open>
+              <summary>Пресет характера</summary>
+              <div class="api-collapsible-body">
+                <p class="api-field-hint">
+                  Готовый тон общения: романтика, флирт, драма и т.д. Можно дополнить своим глобальным промптом выше.
+                </p>
+                <div id="stylePresetPicker" class="style-preset-picker" role="listbox" aria-label="Пресет стиля"></div>
+              </div>
+            </details>
+
+            <details class="api-collapsible" open>
+              <summary>Параметры генерации (температура и выборка)</summary>
+              <div class="api-collapsible-body api-gen-sliders">
+                <p class="api-field-hint api-field-hint--block">
+                  Влияют на случайность ответа. Это не лимит длины текста в токенах — длину задаёт модель и ваш промпт.
+                </p>
+                <label class="api-range-row">
+                  <span>Температура <strong id="temperatureValue">0.55</strong></span>
+                  <input type="range" id="temperatureRange" min="0.2" max="1" step="0.05" value="0.55" aria-describedby="temperatureHint" />
+                </label>
+                <p id="temperatureHint" class="api-range-hint">
+                  <strong>0.2–0.4</strong> — стабильно, мало фантазии.
+                  <strong>0.5–0.7</strong> — баланс.
+                  <strong>0.8–1.0</strong> — креативно, выше риск «уезда» смысла.
+                </p>
+                <label class="api-range-row">
+                  <span>Top P (ядро выборки) <strong id="topPValue">0.85</strong></span>
+                  <input type="range" id="topPRange" min="0.5" max="1" step="0.05" value="0.85" aria-describedby="topPHint" />
+                </label>
+                <p id="topPHint" class="api-range-hint">
+                  Ограничивает разнообразие слов при той же температуре.
+                  <strong>0.5–0.7</strong> — предсказуемее.
+                  <strong>0.85–0.95</strong> — разнообразнее.
+                </p>
+              </div>
+            </details>
+          </section>
         </div>
       </div>
+      <footer class="api-settings-footer">
+        <button type="button" class="ghost-btn" id="apiSettingsCancelBtn">Отмена</button>
+        <button type="button" class="secondary-btn" id="apiSettingsSaveBtn">Сохранить</button>
+      </footer>
     </div>
-  </div>
+  </aside>
 
   <script>
     let API_BASE =
@@ -283,8 +395,29 @@
     const proxyUrlInput = document.getElementById("proxyUrlInput");
     const proxyApiKeyInput = document.getElementById("proxyApiKeyInput");
     const proxyPromptInput = document.getElementById("proxyPromptInput");
+    const llmModelsPicker = document.getElementById("llmModelsPicker");
+    const llmModelsHint = document.getElementById("llmModelsHint");
+    const llmModelPickerTarget = document.getElementById("llmModelPickerTarget");
     const cancelProxyEditBtn = document.getElementById("cancelProxyEditBtn");
     const saveProxyConfigBtn = document.getElementById("saveProxyConfigBtn");
+    const builtinPanelDesc = document.getElementById("builtinPanelDesc");
+    const globalPromptInput = document.getElementById("globalPromptInput");
+    const stylePresetPicker = document.getElementById("stylePresetPicker");
+    const temperatureRange = document.getElementById("temperatureRange");
+    const topPRange = document.getElementById("topPRange");
+    const temperatureValue = document.getElementById("temperatureValue");
+    const topPValue = document.getElementById("topPValue");
+    const apiSettingsSaveBtn = document.getElementById("apiSettingsSaveBtn");
+    const apiSettingsCancelBtn = document.getElementById("apiSettingsCancelBtn");
+    const apiSettingsTabs = document.querySelectorAll(".api-settings-tab");
+    const apiSettingsPanels = document.querySelectorAll(".api-settings-panel");
+    const proxyFormSection = document.getElementById("proxyFormSection");
+    const proxyConfigCount = document.getElementById("proxyConfigCount");
+    const exportProxyBtn = document.getElementById("exportProxyBtn");
+    const importProxyBtn = document.getElementById("importProxyBtn");
+    const chatInputPersonaBtn = document.getElementById("chatInputPersonaBtn");
+    const chatInputPersonaAvatar = document.getElementById("chatInputPersonaAvatar");
+    const chatInputPersonaName = document.getElementById("chatInputPersonaName");
 
     let currentChatId = null;
     let currentBot = null;
@@ -297,9 +430,83 @@
     let selectedPersonaInModal = null;
     const PROXY_CONFIGS_KEY = `chatProxyConfigs_${userId}`;
     const ACTIVE_PROXY_KEY = `chatActiveProxy_${userId}`;
+    const LLM_SOURCE_KEY = `chatLlmSource_${userId}`;
+    const BUILTIN_MODEL_KEY = `chatBuiltinModel_${userId}`;
+    const GENERATION_SETTINGS_KEY = `chatGenerationSettings_${userId}`;
+    const STYLE_PRESETS = {
+      neutral: {
+        label: "Нейтральный",
+        hint: "Сбалансированный тон без усиления",
+        temperature: 0.55,
+        prompt: "",
+      },
+      romantic: {
+        label: "Романтичный",
+        hint: "Нежность, эмоции, тёплая близость",
+        temperature: 0.78,
+        prompt:
+          "Усиль романтичную атмосферу: нежные эмоции, внимание к чувствам собеседника, тёплые метафоры. Флирт допустим в мягкой форме, без откровенных сцен. Пиши живо и с эмпатией.",
+      },
+      tender: {
+        label: "Нежный",
+        hint: "Мягкость, забота, спокойная близость",
+        temperature: 0.72,
+        prompt:
+          "Говори мягко и заботливо: поддерживай, утешай, подмечай мелочи. Избегай резкости и сарказма. Тон — тёплый и безопасный.",
+      },
+      flirty: {
+        label: "Игривый флирт",
+        hint: "Лёгкий флирт и игривость",
+        temperature: 0.82,
+        prompt:
+          "Добавь лёгкий игривый флирт: поддразнивания, комплименты, игривые паузы. Без пошлости и без давления — только игривое напряжение.",
+      },
+      passionate: {
+        label: "Страстный",
+        hint: "Яркие эмоции и напряжение",
+        temperature: 0.85,
+        prompt:
+          "Усиль эмоциональное напряжение и страсть в репликах: короткие фразы, сильные образы, ощущение сближения. Без порнографических подробностей — только эмоциональная интенсивность.",
+      },
+      mysterious: {
+        label: "Загадочный",
+        hint: "Интрига, недосказанность",
+        temperature: 0.7,
+        prompt:
+          "Добавь загадочности: недосказанность, намёки, интригующие детали. Не раскрывай всё сразу — оставляй пространство для фантазии.",
+      },
+      dramatic: {
+        label: "Драматичный",
+        hint: "Конфликт, ставки, напряжение",
+        temperature: 0.75,
+        prompt:
+          "Усиль драматургию: внутренние конфликты, ставки, эмоциональные повороты. Реплики выразительные, но без излишней театральности.",
+      },
+      cozy: {
+        label: "Уютный",
+        hint: "Спокойный быт, тепло, доверие",
+        temperature: 0.68,
+        prompt:
+          "Создай уютную атмосферу: спокойный ритм, бытовые детали, ощущение безопасности и доверия между персонажами.",
+      },
+    };
+    let generationSettings = {
+      tone: "neutral",
+      globalPrompt: "",
+      temperature: 0.55,
+      topP: 0.85,
+    };
+    let generationSettingsDraft = null;
+    let activeApiTab = "builtin";
     let proxyConfigs = [];
     let activeProxyId = null;
+    let llmSource = "builtin";
+    let serverLlmStatus = { mode: "ollama", ready: true, model: null, provider: "ollama" };
     let editingProxyId = null;
+    let llmModelsList = [];
+    let llmModelsLoading = false;
+    let modelPickerTarget = "builtin";
+    let builtinSelectedModel = "";
 
     const CHARITOR_FILTERED_BOT_PLACEHOLDER = "__CHARITOR_MSG_FILTERED__";
 
@@ -474,32 +681,571 @@
         proxyConfigs = [];
       }
       activeProxyId = localStorage.getItem(ACTIVE_PROXY_KEY) || null;
+      const savedSource = localStorage.getItem(LLM_SOURCE_KEY);
+      if (savedSource === "proxy" || savedSource === "builtin") {
+        llmSource = savedSource;
+      } else {
+        llmSource = activeProxyId && proxyConfigs.some((p) => p.id === activeProxyId)
+          ? "proxy"
+          : "builtin";
+      }
+      if (
+        llmSource === "proxy" &&
+        (!activeProxyId || !proxyConfigs.some((p) => p.id === activeProxyId))
+      ) {
+        llmSource = "builtin";
+        activeProxyId = null;
+      }
     }
 
     function writeProxyConfigs() {
       localStorage.setItem(PROXY_CONFIGS_KEY, JSON.stringify(proxyConfigs));
-      if (activeProxyId) {
+      localStorage.setItem(LLM_SOURCE_KEY, llmSource);
+      if (activeProxyId && llmSource === "proxy") {
         localStorage.setItem(ACTIVE_PROXY_KEY, activeProxyId);
       } else {
         localStorage.removeItem(ACTIVE_PROXY_KEY);
       }
     }
 
+    function useBuiltinLlm() {
+      llmSource = "builtin";
+      modelPickerTarget = "builtin";
+      writeProxyConfigs();
+      renderProxyConfigs();
+      updateProxyButtonLabel();
+      renderLlmModelsPicker();
+    }
+
+    function useProxyLlm(proxyId) {
+      const target = proxyConfigs.find((item) => item.id === proxyId);
+      if (!target) return false;
+      if (!String(target.proxyUrl || "").trim()) {
+        showToast("У прокси не указан URL");
+        return false;
+      }
+      if (!String(target.model || "").trim()) {
+        showToast("У прокси не указана модель");
+        return false;
+      }
+      llmSource = "proxy";
+      modelPickerTarget = "proxy";
+      activeProxyId = target.id;
+      writeProxyConfigs();
+      renderProxyConfigs();
+      updateProxyButtonLabel();
+      renderLlmModelsPicker();
+      return true;
+    }
+
+    function isUsingBuiltinLlm() {
+      return llmSource !== "proxy";
+    }
+
     function getActiveProxyConfig() {
+      if (isUsingBuiltinLlm()) return null;
       if (!activeProxyId) return null;
       return proxyConfigs.find((item) => item.id === activeProxyId) || null;
     }
 
-    function updateProxyButtonLabel() {
-      const active = getActiveProxyConfig();
-      if (!active) {
-        proxySettingsBtn.textContent = "встроенный qwen";
+    function buildProxyPayloadForRequest() {
+      const activeProxy = getActiveProxyConfig();
+      if (!activeProxy) return null;
+      return {
+        name: activeProxy.name || "",
+        model: activeProxy.model || "",
+        proxy_url: activeProxy.proxyUrl || "",
+        api_key: activeProxy.apiKey || "",
+        custom_prompt: activeProxy.customPrompt || "",
+      };
+    }
+
+    function readGenerationSettings() {
+      try {
+        const raw = localStorage.getItem(GENERATION_SETTINGS_KEY);
+        const parsed = raw ? JSON.parse(raw) : null;
+        if (parsed && typeof parsed === "object") {
+          generationSettings = {
+            tone: STYLE_PRESETS[parsed.tone] ? parsed.tone : "neutral",
+            globalPrompt: String(parsed.globalPrompt || ""),
+            temperature: Number(parsed.temperature),
+            topP: Number(parsed.topP ?? parsed.top_p),
+          };
+        }
+      } catch {
+        /* defaults */
+      }
+      if (!Number.isFinite(generationSettings.temperature)) {
+        generationSettings.temperature = STYLE_PRESETS[generationSettings.tone]?.temperature ?? 0.55;
+      }
+      if (!Number.isFinite(generationSettings.topP)) {
+        generationSettings.topP = 0.85;
+      }
+      generationSettings.temperature = Math.min(1, Math.max(0.2, generationSettings.temperature));
+      generationSettings.topP = Math.min(1, Math.max(0.5, generationSettings.topP));
+    }
+
+    function writeGenerationSettings() {
+      localStorage.setItem(
+        GENERATION_SETTINGS_KEY,
+        JSON.stringify({
+          tone: generationSettings.tone,
+          globalPrompt: generationSettings.globalPrompt,
+          temperature: generationSettings.temperature,
+          topP: generationSettings.topP,
+        }),
+      );
+    }
+
+    function isApiDrawerOpen() {
+      return proxyModal?.classList.contains("open");
+    }
+
+    function buildLlmSettingsPayload() {
+      if (isApiDrawerOpen()) {
+        collectGenerationSettingsFromUI();
+      }
+      const preset = STYLE_PRESETS[generationSettings.tone] || STYLE_PRESETS.neutral;
+      const parts = [];
+      const global = String(generationSettings.globalPrompt || "").trim();
+      if (global) parts.push(global);
+      if (preset.prompt) parts.push(preset.prompt);
+      const custom_prompt = parts.join("\n\n").trim();
+      const payload = {
+        temperature: generationSettings.temperature,
+        top_p: generationSettings.topP,
+      };
+      if (custom_prompt) payload.custom_prompt = custom_prompt;
+      return payload;
+    }
+
+    function buildLlmRequestExtras() {
+      return {
+        ...getLlmModelPayloadField(),
+        llm_settings: buildLlmSettingsPayload(),
+      };
+    }
+
+    function syncGenerationRangeLabels() {
+      if (temperatureValue && temperatureRange) {
+        temperatureValue.textContent = Number(temperatureRange.value).toFixed(2);
+      }
+      if (topPValue && topPRange) {
+        topPValue.textContent = Number(topPRange.value).toFixed(2);
+      }
+    }
+
+    function syncGenerationUIFromSettings() {
+      if (globalPromptInput) {
+        globalPromptInput.value = generationSettings.globalPrompt || "";
+      }
+      if (temperatureRange) {
+        temperatureRange.value = String(generationSettings.temperature);
+      }
+      if (topPRange) {
+        topPRange.value = String(generationSettings.topP);
+      }
+      syncGenerationRangeLabels();
+      renderStylePresetPicker();
+    }
+
+    function collectGenerationSettingsFromUI() {
+      generationSettings.globalPrompt = String(globalPromptInput?.value || "").trim();
+      generationSettings.temperature = Number(temperatureRange?.value || 0.55);
+      generationSettings.topP = Number(topPRange?.value || 0.85);
+    }
+
+    function renderStylePresetPicker() {
+      if (!stylePresetPicker) return;
+      stylePresetPicker.innerHTML = "";
+      Object.entries(STYLE_PRESETS).forEach(([id, preset]) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className =
+          id === generationSettings.tone
+            ? "style-preset-chip active"
+            : "style-preset-chip";
+        btn.dataset.stylePreset = id;
+        btn.title = preset.hint;
+        btn.innerHTML = `<strong>${escapeHtml(preset.label)}</strong><span>${escapeHtml(preset.hint)}</span>`;
+        stylePresetPicker.appendChild(btn);
+      });
+    }
+
+    function switchApiSettingsTab(tabId) {
+      activeApiTab = tabId;
+      apiSettingsTabs.forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.apiTab === tabId);
+      });
+      apiSettingsPanels.forEach((panel) => {
+        panel.classList.toggle("active", panel.dataset.apiPanel === tabId);
+      });
+      if (tabId === "builtin") {
+        modelPickerTarget = "builtin";
+        syncModelPickerTargetLabel();
+        renderLlmModelsPicker();
+      }
+      if (tabId === "proxy") {
+        modelPickerTarget = "proxy";
+        syncModelPickerTargetLabel();
+      }
+    }
+
+    function updateBuiltinPanelDesc() {
+      if (!builtinPanelDesc) return;
+      builtinPanelDesc.textContent = getBuiltinLlmDescription();
+    }
+
+    function readBuiltinSelectedModel() {
+      builtinSelectedModel = String(localStorage.getItem(BUILTIN_MODEL_KEY) || "").trim();
+    }
+
+    function writeBuiltinSelectedModel(modelId) {
+      builtinSelectedModel = String(modelId || "").trim();
+      if (builtinSelectedModel) {
+        localStorage.setItem(BUILTIN_MODEL_KEY, builtinSelectedModel);
+      } else {
+        localStorage.removeItem(BUILTIN_MODEL_KEY);
+      }
+    }
+
+    function getBuiltinEffectiveModel() {
+      return (
+        builtinSelectedModel ||
+        serverLlmStatus.model ||
+        ""
+      );
+    }
+
+    function getBuiltinLlmLabel() {
+      if (serverLlmStatus.mode === "cloud") {
+        const provider = serverLlmStatus.provider || "cloud";
+        const model = getBuiltinEffectiveModel();
+        const shortModel = model.includes("/") ? model.split("/").pop() : model;
+        return shortModel ? `${provider}: ${shortModel}` : provider;
+      }
+      return "Ollama";
+    }
+
+    function getBuiltinLlmDescription() {
+      if (serverLlmStatus.mode === "cloud") {
+        if (!serverLlmStatus.ready) {
+          return "Не настроена на сервере (LLM_API_KEY в .env)";
+        }
+        return getBuiltinEffectiveModel() || "Модель из .env на сервере";
+      }
+      return "Локальная Ollama на сервере (qwen и др.)";
+    }
+
+    function getLlmModelPayloadField() {
+      if (!isUsingBuiltinLlm()) return {};
+      const model = getBuiltinEffectiveModel();
+      return model ? { llm_model: model } : {};
+    }
+
+    function syncModelPickerTargetLabel() {
+      if (!llmModelPickerTarget) return;
+      llmModelPickerTarget.textContent = modelPickerTarget === "proxy"
+        ? "(для прокси в форме)"
+        : "(встроенная)";
+    }
+
+    function getPickerSelectedModelId() {
+      if (modelPickerTarget === "proxy") {
+        return String(proxyModelInput?.value || "").trim();
+      }
+      return getBuiltinEffectiveModel();
+    }
+
+    function shortModelLabel(modelId) {
+      const id = String(modelId || "");
+      if (!id) return "—";
+      const parts = id.split("/");
+      return parts.length > 1 ? parts[parts.length - 1] : id;
+    }
+
+    function selectLlmModel(modelId) {
+      const id = String(modelId || "").trim();
+      if (!id) return;
+      if (modelPickerTarget === "proxy") {
+        if (proxyModelInput) proxyModelInput.value = id;
+        const provider = serverLlmStatus.provider || "";
+        if (
+          provider === "chutes" &&
+          proxyUrlInput &&
+          !String(proxyUrlInput.value || "").trim()
+        ) {
+          proxyUrlInput.value = "https://llm.chutes.ai/v1/chat/completions";
+        }
+        if (activeProxyId) {
+          proxyConfigs = proxyConfigs.map((item) =>
+            item.id === activeProxyId ? { ...item, model: id } : item,
+          );
+          writeProxyConfigs();
+          renderProxyConfigs();
+          updateProxyButtonLabel();
+        }
+        showToast(`Модель для прокси: ${shortModelLabel(id)}`);
+      } else {
+        if (!isUsingBuiltinLlm()) {
+          llmSource = "builtin";
+          writeProxyConfigs();
+        }
+        writeBuiltinSelectedModel(id);
+        renderProxyConfigs();
+        updateProxyButtonLabel();
+        showToast(`Встроенная модель: ${shortModelLabel(id)}`);
+      }
+      renderLlmModelsPicker();
+    }
+
+    async function loadLlmModelsList() {
+      if (llmModelsLoading) return;
+      llmModelsLoading = true;
+      if (llmModelsHint) {
+        llmModelsHint.textContent = "Загрузка списка моделей…";
+      }
+      try {
+        const response = await fetch(`${API_BASE}/api/llm-models`);
+        const data = await safeReadJson(response);
+        if (!response.ok) {
+          throw new Error(data.message || "Не удалось загрузить модели");
+        }
+        llmModelsList = Array.isArray(data.models) ? data.models : [];
+        if (
+          !builtinSelectedModel &&
+          data.default_model &&
+          serverLlmStatus.mode === "cloud"
+        ) {
+          writeBuiltinSelectedModel(data.default_model);
+        }
+        if (llmModelsHint) {
+          llmModelsHint.textContent = llmModelsList.length
+            ? "Нажмите на модель, чтобы выбрать"
+            : "Список пуст — введите модель вручную в поле ниже";
+        }
+      } catch (error) {
+        llmModelsList = [];
+        if (llmModelsHint) {
+          llmModelsHint.textContent =
+            error.message || "Список моделей недоступен";
+        }
+      } finally {
+        llmModelsLoading = false;
+        renderLlmModelsPicker();
+      }
+    }
+
+    function renderLlmModelsPicker() {
+      if (!llmModelsPicker) return;
+      llmModelsPicker.innerHTML = "";
+      syncModelPickerTargetLabel();
+
+      if (llmModelsLoading) {
+        llmModelsPicker.innerHTML = `<div class="llm-models-empty">Загрузка…</div>`;
         return;
       }
-      proxySettingsBtn.textContent = `прокси: ${active.name}`;
+
+      if (!llmModelsList.length) {
+        const current = getPickerSelectedModelId();
+        if (current) {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "llm-model-chip active";
+          chip.textContent = shortModelLabel(current);
+          chip.title = current;
+          chip.dataset.modelId = current;
+          llmModelsPicker.appendChild(chip);
+        }
+        return;
+      }
+
+      const selectedId = getPickerSelectedModelId();
+      llmModelsList.forEach((item) => {
+        const id = String(item?.id || item?.name || "").trim();
+        if (!id) return;
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = selectedId === id ? "llm-model-chip active" : "llm-model-chip";
+        chip.textContent = shortModelLabel(id);
+        chip.title = id;
+        chip.dataset.modelId = id;
+        chip.setAttribute("role", "option");
+        chip.setAttribute("aria-selected", selectedId === id ? "true" : "false");
+        llmModelsPicker.appendChild(chip);
+      });
+    }
+
+    function validateLlmBeforeRequest() {
+      if (isUsingBuiltinLlm()) {
+        if (serverLlmStatus.mode === "cloud" && !serverLlmStatus.ready) {
+          throw new Error(
+            "Встроенная модель не настроена на сервере (LLM_API_KEY в .env)",
+          );
+        }
+        return;
+      }
+      const activeProxy = getActiveProxyConfig();
+      if (!activeProxy) {
+        throw new Error("Выберите прокси в настройках API или переключитесь на встроенную модель");
+      }
+      if (!String(activeProxy.proxyUrl || "").trim()) {
+        throw new Error("У выбранного прокси не указан URL");
+      }
+      if (!String(activeProxy.model || "").trim()) {
+        throw new Error("У выбранного прокси не указана модель");
+      }
+    }
+
+    async function loadServerLlmStatus() {
+      try {
+        const response = await fetch(`${API_BASE}/api/llm-status`);
+        const data = await safeReadJson(response);
+        if (response.ok && data && typeof data === "object") {
+          serverLlmStatus = {
+            mode: data.mode === "cloud" ? "cloud" : "ollama",
+            ready: Boolean(data.ready),
+            model: data.model || null,
+            provider: data.provider || null,
+          };
+        }
+      } catch {
+        /* сервер без /api/llm-status — режим Ollama */
+      }
+    }
+
+    function applyServerLlmUi() {
+      if (!proxySettingsBtn) return;
+      proxySettingsBtn.hidden = false;
+      updateBuiltinPanelDesc();
+      updateProxyButtonLabel();
+      if (
+        isUsingBuiltinLlm() &&
+        serverLlmStatus.mode === "cloud" &&
+        !serverLlmStatus.ready
+      ) {
+        showToast(
+          "Встроенная модель на сервере не настроена. Добавьте LLM_API_KEY в .env или выберите свой прокси.",
+        );
+      }
+    }
+
+    function updateProxyButtonLabel() {
+      if (!proxySettingsBtn) return;
+      if (isUsingBuiltinLlm()) {
+        proxySettingsBtn.textContent = `встроенная: ${getBuiltinLlmLabel()}`;
+        proxySettingsBtn.title = getBuiltinLlmDescription();
+        return;
+      }
+      const active = getActiveProxyConfig();
+      proxySettingsBtn.textContent = active
+        ? `прокси: ${active.name}`
+        : "прокси не выбран";
+      proxySettingsBtn.title = active?.model
+        ? `Модель: ${active.model}`
+        : "Откройте настройки API";
+    }
+
+    function showProxyForm() {
+      if (proxyFormSection) proxyFormSection.classList.remove("hidden");
+    }
+
+    function hideProxyForm() {
+      if (proxyFormSection) proxyFormSection.classList.add("hidden");
+    }
+
+    function updateProxyConfigCount() {
+      if (!proxyConfigCount) return;
+      const n = proxyConfigs.length;
+      proxyConfigCount.textContent =
+        n === 0
+          ? "0 конфигураций"
+          : n === 1
+            ? "1 конфигурация"
+            : n >= 2 && n <= 4
+              ? `${n} конфигурации`
+              : `${n} конфигураций`;
+    }
+
+    function syncChatInputPersona() {
+      if (!chatInputPersonaName || !chatInputPersonaAvatar) return;
+      if (activePersona?.name) {
+        chatInputPersonaName.textContent = activePersona.name;
+        chatInputPersonaAvatar.src =
+          activePersona.avatar_url || savedUser?.avatar_url || "/img/icon.svg";
+      } else {
+        chatInputPersonaName.textContent = "Персона не выбрана";
+        chatInputPersonaAvatar.src = savedUser?.avatar_url || "/img/icon.svg";
+      }
+    }
+
+    function exportProxyConfigs() {
+      const payload = {
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        configs: proxyConfigs,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "charitor-proxy-configs.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast("Прокси экспортированы");
+    }
+
+    function importProxyConfigs() {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = "application/json,.json";
+      input.addEventListener("change", () => {
+        const file = input.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          try {
+            const data = JSON.parse(String(reader.result || "{}"));
+            const items = Array.isArray(data)
+              ? data
+              : Array.isArray(data?.configs)
+                ? data.configs
+                : [];
+            if (!items.length) {
+              showToast("В файле нет конфигураций");
+              return;
+            }
+            proxyConfigs = items
+              .map((item, index) => ({
+                id:
+                  String(item.id || "").trim() ||
+                  `${Date.now()}_${index}_${Math.random().toString(36).slice(2)}`,
+                name: String(item.name || "").trim() || `Прокси ${index + 1}`,
+                model: String(item.model || "").trim(),
+                proxyUrl: String(item.proxyUrl || item.proxy_url || "").trim(),
+                apiKey: String(item.apiKey || item.api_key || "").trim(),
+                customPrompt: String(
+                  item.customPrompt || item.custom_prompt || "",
+                ).trim(),
+              }))
+              .filter((item) => item.name);
+            writeProxyConfigs();
+            renderProxyConfigs();
+            updateProxyButtonLabel();
+            showToast(`Импортировано: ${proxyConfigs.length}`);
+          } catch {
+            showToast("Не удалось прочитать файл");
+          }
+        };
+        reader.readAsText(file, "utf-8");
+      });
+      input.click();
     }
 
     function clearProxyForm() {
+      modelPickerTarget = isUsingBuiltinLlm() ? "builtin" : "proxy";
       editingProxyId = null;
       proxyFormTitle.textContent = "Новая конфигурация";
       proxyNameInput.value = "";
@@ -507,9 +1253,11 @@
       proxyUrlInput.value = "";
       proxyApiKeyInput.value = "";
       proxyPromptInput.value = "";
+      hideProxyForm();
     }
 
     function fillProxyForm(config) {
+      modelPickerTarget = "proxy";
       editingProxyId = config.id;
       proxyFormTitle.textContent = "Редактировать конфигурацию";
       proxyNameInput.value = config.name || "";
@@ -517,25 +1265,60 @@
       proxyUrlInput.value = config.proxyUrl || "";
       proxyApiKeyInput.value = config.apiKey || "";
       proxyPromptInput.value = config.customPrompt || "";
+      showProxyForm();
+      renderLlmModelsPicker();
     }
 
     function renderProxyConfigs() {
       proxyConfigsList.innerHTML = "";
+      updateProxyConfigCount();
+
+      const builtinRow = document.createElement("div");
+      builtinRow.className = isUsingBuiltinLlm()
+        ? "proxy-config-row proxy-config-row--builtin active"
+        : "proxy-config-row proxy-config-row--builtin";
+      builtinRow.innerHTML = `
+        <div class="proxy-config-main">
+          <strong>Встроенная модель сервера</strong>
+          <span>${escapeHtml(getBuiltinLlmDescription())}</span>
+        </div>
+        <div class="proxy-config-actions">
+          <span class="proxy-row-selected-mark" aria-hidden="true">✓</span>
+        </div>
+      `;
+      builtinRow.dataset.proxySelect = "builtin";
+      builtinRow.setAttribute("role", "button");
+      builtinRow.setAttribute("tabindex", "0");
+      builtinRow.setAttribute(
+        "aria-pressed",
+        isUsingBuiltinLlm() ? "true" : "false",
+      );
+      proxyConfigsList.appendChild(builtinRow);
+
       if (!proxyConfigs.length) {
-        proxyConfigsList.innerHTML = `<div class="persona-empty">Конфигураций пока нет</div>`;
+        const empty = document.createElement("div");
+        empty.className = "persona-empty";
+        empty.textContent = "Своих прокси пока нет — нажмите «+ Новый»";
+        proxyConfigsList.appendChild(empty);
         return;
       }
 
       proxyConfigs.forEach((config) => {
         const row = document.createElement("div");
-        row.className = activeProxyId === config.id ? "proxy-config-row active" : "proxy-config-row";
+        const isActive = llmSource === "proxy" && activeProxyId === config.id;
+        row.className = isActive ? "proxy-config-row active" : "proxy-config-row";
+        row.dataset.proxySelect = "proxy";
+        row.dataset.proxyId = config.id;
+        row.setAttribute("role", "button");
+        row.setAttribute("tabindex", "0");
+        row.setAttribute("aria-pressed", isActive ? "true" : "false");
         row.innerHTML = `
           <div class="proxy-config-main">
             <strong>${escapeHtml(config.name || "Без имени")}</strong>
             <span>${escapeHtml(config.model || "Модель не указана")}</span>
           </div>
           <div class="proxy-config-actions">
-            <button type="button" class="message-action-btn" data-proxy-action="use" data-proxy-id="${config.id}" title="Использовать">✓</button>
+            <span class="proxy-row-selected-mark" aria-hidden="true">✓</span>
             <button type="button" class="message-action-btn" data-proxy-action="edit" data-proxy-id="${config.id}" title="Редактировать">✎</button>
             <button type="button" class="message-action-btn danger" data-proxy-action="delete" data-proxy-id="${config.id}" title="Удалить">🗑</button>
           </div>
@@ -546,23 +1329,64 @@
 
     function openProxyModal() {
       readProxyConfigs();
+      readGenerationSettings();
+      readBuiltinSelectedModel();
+      generationSettingsDraft = JSON.parse(JSON.stringify(generationSettings));
+      modelPickerTarget = isUsingBuiltinLlm() ? "builtin" : "proxy";
+      switchApiSettingsTab(isUsingBuiltinLlm() ? "builtin" : "proxy");
       renderProxyConfigs();
       clearProxyForm();
-      proxyModal.classList.remove("hidden");
+      syncGenerationUIFromSettings();
+      void loadLlmModelsList();
+      proxyModal.classList.add("open");
+      proxyModal.setAttribute("aria-hidden", "false");
       dropdownMenu.classList.remove("open");
       syncChatOverlayState();
     }
 
     function closeProxyModal() {
-      proxyModal.classList.add("hidden");
+      proxyModal.classList.remove("open");
+      proxyModal.setAttribute("aria-hidden", "true");
       syncChatOverlayState();
     }
 
+    function closeProxyModalKeepChanges() {
+      collectGenerationSettingsFromUI();
+      generationSettingsDraft = JSON.parse(JSON.stringify(generationSettings));
+      closeProxyModal();
+    }
+
+    function toggleProxyModal() {
+      if (isApiDrawerOpen()) {
+        closeProxyModalKeepChanges();
+        return;
+      }
+      openProxyModal();
+    }
+
+    function cancelApiSettingsDraft() {
+      if (generationSettingsDraft) {
+        generationSettings = JSON.parse(JSON.stringify(generationSettingsDraft));
+        syncGenerationUIFromSettings();
+      }
+      closeProxyModal();
+    }
+
+    function saveApiSettingsFromModal() {
+      collectGenerationSettingsFromUI();
+      writeGenerationSettings();
+      generationSettingsDraft = JSON.parse(JSON.stringify(generationSettings));
+      updateProxyButtonLabel();
+      showToast("Настройки сохранены — можно тестировать в чате");
+    }
+
     function syncChatOverlayState() {
-      const hasOpenOverlay =
-        !proxyModal.classList.contains("hidden") ||
-        !personaModal.classList.contains("hidden");
-      document.body.classList.toggle("chat-overlay-open", hasOpenOverlay);
+      const confirmModal = document.getElementById("chatConfirmModal");
+      const hasBlockingOverlay =
+        !personaModal.classList.contains("hidden") ||
+        (confirmModal && !confirmModal.classList.contains("hidden"));
+      document.body.classList.toggle("chat-overlay-open", hasBlockingOverlay);
+      document.body.classList.toggle("chat-api-drawer-open", isApiDrawerOpen());
     }
 
     let toastTimer = null;
@@ -594,6 +1418,7 @@
 
         const finish = (value) => {
           modal.classList.add("hidden");
+          syncChatOverlayState();
           modal.removeEventListener("click", onBackdrop);
           document.removeEventListener("keydown", onKey);
           okBtn.removeEventListener("click", onOk);
@@ -616,6 +1441,7 @@
         cancelBtn.addEventListener("click", onCancel);
 
         modal.classList.remove("hidden");
+        syncChatOverlayState();
         okBtn.focus();
       });
     }
@@ -642,6 +1468,7 @@
         activePersonaName.textContent = "не выбрана";
         personaBtn.classList.remove("active");
       }
+      syncChatInputPersona();
     }
 
     function personaStubFromNumericId(rawId) {
@@ -1477,7 +2304,7 @@
     }
 
     async function sendMessageToServer(text, signal) {
-      const activeProxy = getActiveProxyConfig();
+      validateLlmBeforeRequest();
       const payload = {
         text,
         persona_id: activePersona?.id || null,
@@ -1486,15 +2313,8 @@
           activePersona?.persona_prompt ||
           activePersona?.description ||
           "",
-        proxy: activeProxy
-          ? {
-              name: activeProxy.name || "",
-              model: activeProxy.model || "",
-              proxy_url: activeProxy.proxyUrl || "",
-              api_key: activeProxy.apiKey || "",
-              custom_prompt: activeProxy.customPrompt || "",
-            }
-          : null,
+        proxy: buildProxyPayloadForRequest(),
+        ...buildLlmRequestExtras(),
       };
 
       const response = await fetch(`${API_BASE}/chat/${currentChatId}/message`, {
@@ -1588,7 +2408,7 @@
     }
 
     async function regenerateMessageOnServer(messageId, signal, { swipe = false } = {}) {
-      const activeProxy = getActiveProxyConfig();
+      validateLlmBeforeRequest();
       const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/${messageId}/regenerate`, {
         method: "POST",
         headers: {
@@ -1599,15 +2419,8 @@
           swipe: Boolean(swipe),
           persona_prompt: activePersona?.persona_prompt || activePersona?.description || "",
           persona_name: activePersona?.name || "",
-          proxy: activeProxy
-            ? {
-                name: activeProxy.name || "",
-                model: activeProxy.model || "",
-                proxy_url: activeProxy.proxyUrl || "",
-                api_key: activeProxy.apiKey || "",
-                custom_prompt: activeProxy.customPrompt || "",
-              }
-            : null,
+          proxy: buildProxyPayloadForRequest(),
+          ...buildLlmRequestExtras(),
         }),
         signal,
       });
@@ -1827,54 +2640,134 @@
     });
 
     personaBtn.addEventListener("click", openPersonaModal);
-    proxySettingsBtn.addEventListener("click", openProxyModal);
+    proxySettingsBtn.addEventListener("click", toggleProxyModal);
     openPersonaModalBtn.addEventListener("click", openPersonaModal);
     closePersonaModalBtn.addEventListener("click", closePersonaModal);
-    closeProxyModalBtn.addEventListener("click", closeProxyModal);
-    addProxyConfigBtn.addEventListener("click", clearProxyForm);
+    closeProxyModalBtn.addEventListener("click", closeProxyModalKeepChanges);
+    if (apiSettingsCancelBtn) {
+      apiSettingsCancelBtn.addEventListener("click", cancelApiSettingsDraft);
+    }
+    if (apiSettingsSaveBtn) {
+      apiSettingsSaveBtn.addEventListener("click", saveApiSettingsFromModal);
+    }
+    apiSettingsTabs.forEach((tabBtn) => {
+      tabBtn.addEventListener("click", () => {
+        const tabId = tabBtn.dataset.apiTab;
+        if (tabId) switchApiSettingsTab(tabId);
+      });
+    });
+    if (stylePresetPicker) {
+      stylePresetPicker.addEventListener("click", (event) => {
+        const chip = event.target.closest(".style-preset-chip");
+        if (!chip?.dataset.stylePreset) return;
+        const presetId = chip.dataset.stylePreset;
+        if (!STYLE_PRESETS[presetId]) return;
+        generationSettings.tone = presetId;
+        const preset = STYLE_PRESETS[presetId];
+        if (temperatureRange) temperatureRange.value = String(preset.temperature);
+        syncGenerationRangeLabels();
+        renderStylePresetPicker();
+      });
+    }
+    if (temperatureRange) {
+      temperatureRange.addEventListener("input", syncGenerationRangeLabels);
+    }
+    if (topPRange) {
+      topPRange.addEventListener("input", syncGenerationRangeLabels);
+    }
+    addProxyConfigBtn.addEventListener("click", () => {
+      modelPickerTarget = "proxy";
+      editingProxyId = null;
+      proxyFormTitle.textContent = "Новая конфигурация";
+      proxyNameInput.value = "";
+      proxyModelInput.value = "";
+      proxyUrlInput.value = "";
+      proxyApiKeyInput.value = "";
+      proxyPromptInput.value = "";
+      showProxyForm();
+      switchApiSettingsTab("proxy");
+      renderLlmModelsPicker();
+      proxyNameInput?.focus();
+    });
+    if (exportProxyBtn) exportProxyBtn.addEventListener("click", exportProxyConfigs);
+    if (importProxyBtn) importProxyBtn.addEventListener("click", importProxyConfigs);
+    if (chatInputPersonaBtn) {
+      chatInputPersonaBtn.addEventListener("click", openPersonaModal);
+    }
+
+    if (llmModelsPicker) {
+      llmModelsPicker.addEventListener("click", (event) => {
+        const chip = event.target.closest(".llm-model-chip");
+        if (!chip) return;
+        const modelId = chip.dataset.modelId;
+        if (!modelId) return;
+        selectLlmModel(modelId);
+      });
+    }
     useBuiltinModelBtn.addEventListener("click", () => {
-      activeProxyId = null;
-      writeProxyConfigs();
-      renderProxyConfigs();
-    updateProxyButtonLabel();
-      showToast("Используется встроенный qwen");
+      useBuiltinLlm();
+      showToast(`Встроенная модель: ${getBuiltinLlmLabel()}`);
     });
     cancelProxyEditBtn.addEventListener("click", clearProxyForm);
 
-    proxyModal.addEventListener("click", (e) => {
-      if (e.target === proxyModal) closeProxyModal();
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && isApiDrawerOpen()) {
+        closeProxyModalKeepChanges();
+      }
     });
 
     proxyConfigsList.addEventListener("click", async (event) => {
-      const btn = event.target.closest("[data-proxy-action]");
-      if (!btn) return;
-      const action = btn.dataset.proxyAction;
-      const proxyId = btn.dataset.proxyId;
+      const actionBtn = event.target.closest("[data-proxy-action]");
+      if (actionBtn) {
+        const action = actionBtn.dataset.proxyAction;
+        const proxyId = actionBtn.dataset.proxyId;
+        const target = proxyConfigs.find((item) => item.id === proxyId);
+        if (!target) return;
+
+        if (action === "edit") {
+          event.stopPropagation();
+          fillProxyForm(target);
+          return;
+        }
+        if (action === "delete") {
+          event.stopPropagation();
+          const ok = await showChatConfirm(`Удалить прокси "${target.name}"?`);
+          if (!ok) return;
+          proxyConfigs = proxyConfigs.filter((item) => item.id !== target.id);
+          if (activeProxyId === target.id) {
+            activeProxyId = null;
+            llmSource = "builtin";
+          }
+          writeProxyConfigs();
+          renderProxyConfigs();
+          updateProxyButtonLabel();
+          clearProxyForm();
+          return;
+        }
+      }
+
+      const row = event.target.closest(".proxy-config-row[data-proxy-select]");
+      if (!row) return;
+
+      if (row.dataset.proxySelect === "builtin") {
+        useBuiltinLlm();
+        showToast(`Встроенная модель: ${getBuiltinLlmLabel()}`);
+        return;
+      }
+
+      const proxyId = row.dataset.proxyId;
       const target = proxyConfigs.find((item) => item.id === proxyId);
       if (!target) return;
+      if (!useProxyLlm(target.id)) return;
+      showToast(`Используется прокси: ${target.name}`);
+    });
 
-      if (action === "use") {
-        activeProxyId = target.id;
-        writeProxyConfigs();
-        renderProxyConfigs();
-        updateProxyButtonLabel();
-        showToast(`Используется прокси: ${target.name}`);
-        return;
-      }
-      if (action === "edit") {
-        fillProxyForm(target);
-        return;
-      }
-      if (action === "delete") {
-        const ok = await showChatConfirm(`Удалить прокси "${target.name}"?`);
-        if (!ok) return;
-        proxyConfigs = proxyConfigs.filter((item) => item.id !== target.id);
-        if (activeProxyId === target.id) activeProxyId = null;
-        writeProxyConfigs();
-        renderProxyConfigs();
-        updateProxyButtonLabel();
-        clearProxyForm();
-      }
+    proxyConfigsList.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.target.closest(".proxy-config-row[data-proxy-select]");
+      if (!row || !proxyConfigsList.contains(row)) return;
+      event.preventDefault();
+      row.click();
     });
 
     saveProxyConfigBtn.addEventListener("click", () => {
@@ -1899,12 +2792,13 @@
         proxyConfigs.unshift(nextConfig);
       }
 
-      if (!activeProxyId) activeProxyId = nextConfig.id;
+      llmSource = "proxy";
+      activeProxyId = nextConfig.id;
       writeProxyConfigs();
       renderProxyConfigs();
       updateProxyButtonLabel();
-      clearProxyForm();
-      showToast("Конфигурация прокси сохранена");
+      hideProxyForm();
+      showToast(`Прокси «${nextConfig.name}» сохранён и выбран`);
     });
 
     clearChatBtn.addEventListener("click", async () => {
@@ -1983,8 +2877,12 @@
 
     (async () => {
       readProxyConfigs();
-      updateProxyButtonLabel();
+      readGenerationSettings();
+      readBuiltinSelectedModel();
+      await loadServerLlmStatus();
+      applyServerLlmUi();
       await loadPersonas();
+      syncChatInputPersona();
       await loadChatByBot();
     })();
   </script>

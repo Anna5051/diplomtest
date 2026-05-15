@@ -206,6 +206,15 @@ function buildSamplingOptions(regenerate) {
   };
 }
 
+/** Убирает служебные блоки рассуждений (Qwen/Chutes и др.), чтобы в чат шла только реплика. */
+function stripModelReasoningArtifacts(text) {
+  return String(text || "")
+    .replace(/<think>[\s\S]*?<\/redacted_thinking>/gi, "")
+    .replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, "")
+    .replace(/[\s\S]*?<\/think>/gi, "")
+    .trim();
+}
+
 async function requestOllamaChat(model, messages, optionOverrides = {}, runtimeConfig = {}) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), OLLAMA_TIMEOUT_MS);
@@ -224,11 +233,15 @@ async function requestOllamaChat(model, messages, optionOverrides = {}, runtimeC
     const proxyApiKey = String(runtimeConfig?.api_key || "").trim();
 
     const useProxy = Boolean(proxyUrl);
+    const proxyReferer = String(runtimeConfig?.http_referer || "").trim();
+    const proxyTitle = String(runtimeConfig?.x_title || "").trim();
     const response = await fetch(useProxy ? proxyUrl : `${OLLAMA_BASE_URL}/api/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...(useProxy && proxyApiKey ? { Authorization: `Bearer ${proxyApiKey}` } : {}),
+        ...(useProxy && proxyReferer ? { "HTTP-Referer": proxyReferer } : {}),
+        ...(useProxy && proxyTitle ? { "X-Title": proxyTitle } : {}),
       },
       body: JSON.stringify(
         useProxy
@@ -254,12 +267,13 @@ async function requestOllamaChat(model, messages, optionOverrides = {}, runtimeC
       throw new Error(data.error || data.message || `LLM error (${response.status})`);
     }
 
-    const text = String(
+    const rawText = String(
       data?.message?.content ||
         data?.choices?.[0]?.message?.content ||
         data?.choices?.[0]?.text ||
         "",
     ).trim();
+    const text = stripModelReasoningArtifacts(rawText);
     if (!text) {
       throw new Error("Пустой ответ от модели");
     }
@@ -814,6 +828,18 @@ async function generateBotReply({
   runtimeConfig = {},
 }) {
   let samplingOptions = buildSamplingOptions(regenerate);
+  if (Number.isFinite(Number(runtimeConfig?.temperature))) {
+    samplingOptions = {
+      ...samplingOptions,
+      temperature: Number(runtimeConfig.temperature),
+    };
+  }
+  if (Number.isFinite(Number(runtimeConfig?.top_p))) {
+    samplingOptions = {
+      ...samplingOptions,
+      top_p: Number(runtimeConfig.top_p),
+    };
+  }
   if (swipeAlternative) {
     samplingOptions = {
       ...samplingOptions,
