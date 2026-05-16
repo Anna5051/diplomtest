@@ -21,6 +21,9 @@ const TAG_LEN = 16;
 
 const LOCAL_KEY_FILE = path.resolve(__dirname, "..", ".messages-content.key");
 const DEPLOY_DEFAULT_KEY_FILE = path.resolve(__dirname, "messages-content-key.default");
+/** Ключ дампа БД — всегда в репозитории, чтобы Railway расшифровывал старые чаты без Variables */
+const BUILTIN_DEPLOY_KEY_HEX =
+  "8a85edfc6cadf5b078aeb71f41e8495330b5dee64ed3655993608b3eeffdc2a1";
 const LEGACY_KEYS_FILE = path.resolve(__dirname, "messages-content-legacy-keys.default");
 
 const KEY_CACHE_UNSET = Symbol("messageContentKeyUnset");
@@ -48,6 +51,8 @@ function keysEqual(a, b) {
 }
 
 function readDeployDefaultKey() {
+  const builtin = parseKeyString(BUILTIN_DEPLOY_KEY_HEX);
+  if (builtin) return builtin;
   try {
     if (!fs.existsSync(DEPLOY_DEFAULT_KEY_FILE)) return null;
     return parseKeyString(fs.readFileSync(DEPLOY_DEFAULT_KEY_FILE, "utf8").trim());
@@ -100,6 +105,11 @@ function getEncryptKeyBuffer() {
   if (deployDefault) {
     cachedKeyBuffer = deployDefault;
     return cachedKeyBuffer;
+  }
+
+  if (isProductionHost()) {
+    cachedKeyBuffer = parseKeyString(BUILTIN_DEPLOY_KEY_HEX);
+    if (cachedKeyBuffer) return cachedKeyBuffer;
   }
 
   if (!isProductionHost()) {
@@ -272,9 +282,13 @@ function decryptMessageRowsForApi(rows) {
       };
     } catch (e) {
       console.error("messageContentCrypto: не удалось расшифровать сообщение id=%s", row.id, e);
+      const raw = String(row.content ?? "");
+      if (!isCiphertext(raw)) {
+        return { ...row, content: raw };
+      }
       return {
         ...row,
-        content: "Текст сообщения недоступен.",
+        content: "",
         _decryptFailed: true,
       };
     }

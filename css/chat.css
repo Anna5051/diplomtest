@@ -2217,30 +2217,31 @@ body.chat-overlay-open .modal {
   }
 
   .message-user {
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    align-self: center;
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+    align-items: flex-start;
+    align-self: stretch;
     width: 100%;
-    gap: 6px;
+    gap: 8px;
+    padding-right: 0;
   }
 
   .message-user .message-avatar {
-    order: 2;
     width: 32px;
     height: 32px;
     border-radius: 8px;
+    flex-shrink: 0;
   }
 
   .message-bot .message-stack {
-    max-width: min(92vw, 560px);
+    max-width: min(88vw, 560px);
   }
 
   .message-user .message-stack {
-    order: 1;
-    max-width: min(92vw, 520px);
+    max-width: min(88vw, 520px);
     width: fit-content;
-    margin-inline: auto;
+    margin-left: auto;
+    margin-right: 0;
     align-items: stretch;
   }
 
@@ -2250,7 +2251,7 @@ body.chat-overlay-open .modal {
   }
 
   .message-user .message-bubble {
-    align-self: stretch;
+    align-self: flex-start;
     width: auto;
     text-align: start;
   }
