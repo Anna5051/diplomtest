@@ -21,6 +21,7 @@ const TAG_LEN = 16;
 
 const LOCAL_KEY_FILE = path.resolve(__dirname, "..", ".messages-content.key");
 const DEPLOY_DEFAULT_KEY_FILE = path.resolve(__dirname, "messages-content-key.default");
+const LEGACY_KEYS_FILE = path.resolve(__dirname, "messages-content-legacy-keys.default");
 
 const KEY_CACHE_UNSET = Symbol("messageContentKeyUnset");
 let cachedKeyBuffer = KEY_CACHE_UNSET;
@@ -50,6 +51,30 @@ function readDeployDefaultKey() {
   try {
     if (!fs.existsSync(DEPLOY_DEFAULT_KEY_FILE)) return null;
     return parseKeyString(fs.readFileSync(DEPLOY_DEFAULT_KEY_FILE, "utf8").trim());
+  } catch (_) {
+    return null;
+  }
+}
+
+function readLegacyKeysFromFile() {
+  const keys = [];
+  try {
+    if (!fs.existsSync(LEGACY_KEYS_FILE)) return keys;
+    const raw = fs.readFileSync(LEGACY_KEYS_FILE, "utf8");
+    for (const part of raw.split(/[\n,]+/)) {
+      const buf = parseKeyString(part);
+      if (buf) keys.push(buf);
+    }
+  } catch (_) {
+    /* ignore */
+  }
+  return keys;
+}
+
+function readLocalKeyFile() {
+  try {
+    if (!fs.existsSync(LOCAL_KEY_FILE)) return null;
+    return parseKeyString(fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim());
   } catch (_) {
     return null;
   }
@@ -128,6 +153,7 @@ function getDecryptKeyBuffers() {
 
   pushKey(parseKeyString(process.env.MESSAGES_CONTENT_KEY));
   pushKey(readDeployDefaultKey());
+  pushKey(readLocalKeyFile());
 
   const legacy = String(process.env.MESSAGES_CONTENT_LEGACY_KEYS || "");
   if (legacy.trim()) {
@@ -136,14 +162,8 @@ function getDecryptKeyBuffers() {
     }
   }
 
-  if (!isProductionHost()) {
-    try {
-      if (fs.existsSync(LOCAL_KEY_FILE)) {
-        pushKey(parseKeyString(fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim()));
-      }
-    } catch (_) {
-      /* ignore */
-    }
+  for (const legacyBuf of readLegacyKeysFromFile()) {
+    pushKey(legacyBuf);
   }
 
   cachedDecryptKeys = list;
