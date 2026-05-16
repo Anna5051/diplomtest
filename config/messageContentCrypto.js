@@ -25,6 +25,14 @@ const KEY_CACHE_UNSET = Symbol("messageContentKeyUnset");
 let cachedKeyBuffer = KEY_CACHE_UNSET;
 let cachedDecryptKeys = null;
 
+function isProductionHost() {
+  return Boolean(
+    process.env.RAILWAY_ENVIRONMENT ||
+      process.env.RAILWAY_SERVICE_NAME ||
+      process.env.NODE_ENV === "production",
+  );
+}
+
 function parseKeyString(raw) {
   const s = String(raw || "").trim();
   if (!s) return null;
@@ -53,17 +61,24 @@ function getEncryptKeyBuffer() {
     return cachedKeyBuffer;
   }
 
-  try {
-    if (fs.existsSync(LOCAL_KEY_FILE)) {
-      const raw = fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim();
-      const fileKey = parseKeyString(raw);
-      if (fileKey) {
-        cachedKeyBuffer = fileKey;
-        return cachedKeyBuffer;
+  if (!isProductionHost()) {
+    try {
+      if (fs.existsSync(LOCAL_KEY_FILE)) {
+        const raw = fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim();
+        const fileKey = parseKeyString(raw);
+        if (fileKey) {
+          cachedKeyBuffer = fileKey;
+          return cachedKeyBuffer;
+        }
       }
+    } catch (err) {
+      console.warn("messageContentCrypto: не удалось прочитать", LOCAL_KEY_FILE, "—", err.message);
     }
-  } catch (err) {
-    console.warn("messageContentCrypto: не удалось прочитать", LOCAL_KEY_FILE, "—", err.message);
+  }
+
+  if (isProductionHost()) {
+    cachedKeyBuffer = null;
+    return null;
   }
 
   try {
@@ -104,16 +119,29 @@ function getDecryptKeyBuffers() {
     }
   }
 
-  try {
-    if (fs.existsSync(LOCAL_KEY_FILE)) {
-      pushKey(parseKeyString(fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim()));
+  if (!isProductionHost()) {
+    try {
+      if (fs.existsSync(LOCAL_KEY_FILE)) {
+        pushKey(parseKeyString(fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim()));
+      }
+    } catch (_) {
+      /* ignore */
     }
-  } catch (_) {
-    /* ignore */
   }
 
   cachedDecryptKeys = list;
   return list;
+}
+
+function logKeyConfiguration() {
+  const keys = getDecryptKeyBuffers();
+  if (keys.length) {
+    console.log("messageContentCrypto: ключей для расшифровки —", keys.length);
+    return;
+  }
+  console.warn(
+    "messageContentCrypto: MESSAGES_CONTENT_KEY не задан — зашифрованные сообщения в чате не откроются. Скопируйте ключ из .messages-content.key на ПК.",
+  );
 }
 
 function isCiphertext(value) {
@@ -209,7 +237,8 @@ function decryptMessageRowsForApi(rows) {
       console.error("messageContentCrypto: не удалось расшифровать сообщение id=%s", row.id, e);
       return {
         ...row,
-        content: "…",
+        content: "Текст сообщения недоступен (на сервере не задан MESSAGES_CONTENT_KEY).",
+        _decryptFailed: true,
       };
     }
   });
@@ -220,4 +249,5 @@ module.exports = {
   decryptMessageContentFromDb,
   decryptMessageRowsForApi,
   isCiphertext,
+  logKeyConfiguration,
 };

@@ -419,7 +419,40 @@ body.page-transition.page-leaving {
   }
 
   .chat-topbar {
-    display: flex !important;
+    display: grid !important;
+    grid-template-columns: 1fr auto !important;
+    gap: 4px 8px !important;
+    padding: 8px 10px !important;
+    min-height: 0 !important;
+  }
+
+  .brand,
+  .brand-link {
+    font-size: 17px !important;
+    font-weight: 800 !important;
+    letter-spacing: -0.3px !important;
+  }
+
+  .back-btn,
+  .top-link,
+  .back-link,
+  .top-btn,
+  .mini-link {
+    min-height: 32px !important;
+    font-size: 12px !important;
+    padding: 0 10px !important;
+  }
+
+  .menu-btn {
+    width: 32px !important;
+    height: 32px !important;
+    font-size: 14px !important;
+  }
+
+  .proxy-settings-btn {
+    font-size: 10px !important;
+    padding: 0 7px !important;
+    min-height: 26px !important;
   }
 
   .site-notify-stack {

@@ -1092,6 +1092,13 @@ body.chat-overlay-open .modal {
   padding: 0;
 }
 
+.message-bubble.message-bubble--unavailable {
+  font-size: 13px;
+  line-height: 1.45;
+  color: rgba(220, 200, 255, 0.75);
+  font-style: italic;
+}
+
 .message-bubble-footer {
   width: 100%;
   margin-top: 2px;
@@ -2131,10 +2138,14 @@ body.chat-overlay-open .modal {
 
 @media (max-width: 700px) {
   .chat-topbar {
+    display: grid !important;
     height: auto;
-    min-height: 68px;
+    min-height: 0;
+    max-width: 100% !important;
+    margin: 0 !important;
     grid-template-columns: 1fr auto;
-    gap: 4px 8px;
+    grid-template-rows: auto auto;
+    gap: 2px 8px;
     padding: 8px 10px;
     background: rgba(20, 22, 34, 0.94);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -2143,22 +2154,28 @@ body.chat-overlay-open .modal {
   .chat-topbar .brand-link {
     justify-self: start;
     text-align: left;
+    grid-column: 1;
+    grid-row: 1;
   }
 
   .brand-link {
-    font-size: 16px;
-    line-height: 1;
+    font-size: 15px !important;
+    line-height: 1.1;
     color: #e7e8ef;
     opacity: 0.95;
-    font-weight: 700;
+    font-weight: 700 !important;
+    letter-spacing: -0.2px !important;
   }
 
   .chat-title {
     grid-column: 1 / -1;
-    font-size: 14px;
+    grid-row: 2;
+    font-size: 12px;
     text-align: center;
     white-space: nowrap;
-    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 0;
     color: #eef0f6;
     opacity: 0.98;
   }
@@ -2173,9 +2190,19 @@ body.chat-overlay-open .modal {
     width: auto !important;
   }
 
+  .chat-page {
+    max-width: min(820px, calc(100vw - 20px));
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
   .messages-box {
     align-items: stretch;
     width: 100%;
+    max-width: 100%;
+    margin: 0 auto;
   }
 
   .message {
@@ -2186,21 +2213,37 @@ body.chat-overlay-open .modal {
   .message-bot {
     flex-direction: row;
     justify-content: flex-start;
-    align-self: stretch;
+    align-self: flex-start;
   }
 
   .message-user {
     flex-direction: row-reverse;
     justify-content: flex-end;
-    align-self: stretch;
+    align-self: flex-end;
   }
 
   .message-bot .message-stack {
-    max-width: min(88vw, 560px);
+    max-width: min(92vw, 560px);
   }
 
   .message-user .message-stack {
-    max-width: min(88vw, 560px);
+    max-width: min(92vw, 560px);
+  }
+
+  .message-bubble {
+    width: auto;
+    max-width: 100%;
+  }
+
+  .message-user .message-bubble {
+    align-self: flex-start;
+    width: auto;
+  }
+
+  .notice {
+    margin-left: auto;
+    margin-right: auto;
+    text-align: center;
   }
 
   .persona-pill {

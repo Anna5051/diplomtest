@@ -229,22 +229,44 @@ nav {
 }
 
 @media (max-width: 768px) {
+  .container {
+    padding: 0 12px;
+  }
+
   nav {
     flex-direction: row;
     justify-content: space-between;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
+    padding: 8px 0;
   }
 
   .nav {
     flex-wrap: nowrap;
     justify-content: flex-end;
-    gap: 10px;
+    gap: 6px;
+    flex-shrink: 1;
   }
 
   .nav li a {
-    padding: 10px 16px;
-    font-size: 14px;
+    padding: 8px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .logo {
+    gap: 8px;
+    min-width: 0;
+    flex-shrink: 1;
+  }
+
+  .logo img {
+    width: 36px;
+    height: 36px;
+  }
+
+  .logo a {
+    font-size: 18px;
   }
 
   .register-page {
