@@ -46,6 +46,10 @@ nav {
   gap: 18px;
 }
 
+.nav-label-short {
+  display: none;
+}
+
 .nav li a {
   display: inline-block;
   text-decoration: none;
@@ -224,24 +228,36 @@ nav {
   }
 
   .nav li a {
-    padding: 8px 12px;
-    font-size: 12px;
+    padding: 6px 9px;
+    font-size: 11px;
     white-space: nowrap;
   }
 
+  .nav-label-long {
+    display: none;
+  }
+
+  .nav-label-short {
+    display: inline;
+  }
+
   .logo {
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
-    flex-shrink: 1;
+    flex: 1 1 auto;
+    max-width: 52%;
   }
 
   .logo img {
-    width: 36px;
-    height: 36px;
+    width: 28px;
+    height: 28px;
   }
 
   .logo a {
-    font-size: 18px;
+    font-size: 15px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .landing-footer-nav {

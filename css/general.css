@@ -428,9 +428,9 @@ body.page-transition.page-leaving {
 
   .brand,
   .brand-link {
-    font-size: 17px !important;
+    font-size: 14px !important;
     font-weight: 800 !important;
-    letter-spacing: -0.3px !important;
+    letter-spacing: -0.2px !important;
   }
 
   .back-btn,

@@ -2159,7 +2159,7 @@ body.chat-overlay-open .modal {
   }
 
   .brand-link {
-    font-size: 15px !important;
+    font-size: 13px !important;
     line-height: 1.1;
     color: #e7e8ef;
     opacity: 0.95;
@@ -2170,7 +2170,7 @@ body.chat-overlay-open .modal {
   .chat-title {
     grid-column: 1 / -1;
     grid-row: 2;
-    font-size: 12px;
+    font-size: 11px;
     text-align: center;
     white-space: nowrap;
     overflow: hidden;

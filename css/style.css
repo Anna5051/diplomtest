@@ -46,6 +46,10 @@ nav {
   gap: 18px;
 }
 
+.nav-label-short {
+  display: none;
+}
+
 .nav li a {
   display: inline-block;
   text-decoration: none;
@@ -334,49 +338,61 @@ nav {
 
 @media (max-width: 768px) {
   header {
-    top: 12px;
+    top: 10px;
   }
 
   .container {
-    padding: 0 12px;
+    padding: 0 10px;
   }
 
   nav {
     flex-direction: row;
     justify-content: space-between;
     align-items: center;
-    gap: 8px;
-    padding: 8px 0;
+    gap: 6px;
+    padding: 6px 0;
   }
 
   .nav {
     flex-wrap: nowrap;
     justify-content: flex-end;
-    gap: 6px;
-    flex-shrink: 1;
+    gap: 4px;
+    flex-shrink: 0;
   }
 
   .nav li a {
-    padding: 8px 12px;
-    font-size: 12px;
+    padding: 6px 9px;
+    font-size: 11px;
     white-space: nowrap;
   }
 
+  .nav-label-long {
+    display: none;
+  }
+
+  .nav-label-short {
+    display: inline;
+  }
+
   .logo {
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
-    flex-shrink: 1;
+    flex: 1 1 auto;
+    max-width: 52%;
   }
 
   .logo img {
-    width: 36px;
-    height: 36px;
+    width: 28px;
+    height: 28px;
     flex-shrink: 0;
   }
 
   .logo a {
-    font-size: 18px;
+    font-size: 15px;
     letter-spacing: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .hero {

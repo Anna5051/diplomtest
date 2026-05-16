@@ -20,6 +20,7 @@ const IV_LEN = 12;
 const TAG_LEN = 16;
 
 const LOCAL_KEY_FILE = path.resolve(__dirname, "..", ".messages-content.key");
+const DEPLOY_DEFAULT_KEY_FILE = path.resolve(__dirname, "messages-content-key.default");
 
 const KEY_CACHE_UNSET = Symbol("messageContentKeyUnset");
 let cachedKeyBuffer = KEY_CACHE_UNSET;
@@ -45,6 +46,15 @@ function keysEqual(a, b) {
   return a && b && a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+function readDeployDefaultKey() {
+  try {
+    if (!fs.existsSync(DEPLOY_DEFAULT_KEY_FILE)) return null;
+    return parseKeyString(fs.readFileSync(DEPLOY_DEFAULT_KEY_FILE, "utf8").trim());
+  } catch (_) {
+    return null;
+  }
+}
+
 function getEncryptKeyBuffer() {
   if (cachedKeyBuffer !== KEY_CACHE_UNSET) {
     return cachedKeyBuffer;
@@ -58,6 +68,12 @@ function getEncryptKeyBuffer() {
   const env = process.env.MESSAGES_CONTENT_KEY;
   if (env != null && String(env).trim() !== "") {
     cachedKeyBuffer = parseKeyString(env);
+    return cachedKeyBuffer;
+  }
+
+  const deployDefault = readDeployDefaultKey();
+  if (deployDefault) {
+    cachedKeyBuffer = deployDefault;
     return cachedKeyBuffer;
   }
 
@@ -111,6 +127,7 @@ function getDecryptKeyBuffers() {
   };
 
   pushKey(parseKeyString(process.env.MESSAGES_CONTENT_KEY));
+  pushKey(readDeployDefaultKey());
 
   const legacy = String(process.env.MESSAGES_CONTENT_LEGACY_KEYS || "");
   if (legacy.trim()) {
@@ -237,7 +254,7 @@ function decryptMessageRowsForApi(rows) {
       console.error("messageContentCrypto: не удалось расшифровать сообщение id=%s", row.id, e);
       return {
         ...row,
-        content: "Текст сообщения недоступен (на сервере не задан MESSAGES_CONTENT_KEY).",
+        content: "Текст сообщения недоступен.",
         _decryptFailed: true,
       };
     }
