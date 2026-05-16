@@ -363,11 +363,25 @@ body.page-transition.page-leaving {
   .topbar-left,
   .topbar-center,
   .topbar-right,
-  .topbar-actions,
-  .chat-topbar-right {
+  .topbar-actions {
     width: 100% !important;
     justify-content: center !important;
     flex-wrap: wrap !important;
+  }
+
+  .chat-topbar {
+    grid-template-columns: 1fr auto !important;
+  }
+
+  .chat-topbar .brand-link {
+    justify-self: start !important;
+    text-align: left !important;
+  }
+
+  .chat-topbar-right {
+    width: auto !important;
+    justify-content: flex-end !important;
+    flex-wrap: nowrap !important;
   }
 
   .search-box,

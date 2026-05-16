@@ -214,6 +214,16 @@ nav {
   background: linear-gradient(135deg, #2a7adf, #2cb6d5);
 }
 
+.footer-social img {
+  display: block;
+  width: 18px;
+  height: 18px;
+}
+
+.footer-social--telegram {
+  background: linear-gradient(135deg, #2aabee, #229ed9);
+}
+
 .landing-footer-nav {
   display: flex;
   flex-wrap: wrap;
@@ -328,13 +338,21 @@ nav {
   }
 
   nav {
-    flex-direction: column;
-    gap: 18px;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
   }
 
   .nav {
-    flex-wrap: wrap;
-    justify-content: center;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .nav li a {
+    padding: 10px 16px;
+    font-size: 14px;
   }
 
   .logo a {
@@ -381,8 +399,9 @@ nav {
   }
 
   .landing-footer-nav {
-    justify-content: flex-start;
+    justify-content: center;
     max-width: none;
+    text-align: center;
   }
 
   .footer-brand {

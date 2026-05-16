@@ -3,9 +3,9 @@
  *
  * Ключ (по приоритету):
  *   1) MESSAGES_CONTENT_KEY в .env — 64 hex-символа (32 байта) ИЛИ любая строка (SHA-256).
- *   2) Если ключа нет: файл `.messages-content.key` в корне проекта (создаётся автоматически с
- *      случайным 64 hex) — чтобы на локальной машине (OpenServer и т.п.) в БД не лежал открытый текст.
- *   3) Явно отключить шифрование: MESSAGES_PLAINTEXT=1 в .env (только для отладки).
+ *   2) MESSAGES_CONTENT_LEGACY_KEYS — доп. ключи через запятую (старые серверы).
+ *   3) Если ключа нет: файл `.messages-content.key` в корне проекта.
+ *   4) MESSAGES_PLAINTEXT=1 — отключить шифрование (только отладка).
  *
  * Старые открытые строки без префикса CHARITOR_ENC_V1: при чтении возвращаются как есть.
  */
@@ -23,8 +23,21 @@ const LOCAL_KEY_FILE = path.resolve(__dirname, "..", ".messages-content.key");
 
 const KEY_CACHE_UNSET = Symbol("messageContentKeyUnset");
 let cachedKeyBuffer = KEY_CACHE_UNSET;
+let cachedDecryptKeys = null;
 
-function getKeyBuffer() {
+function parseKeyString(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  return /^[0-9a-fA-F]{64}$/.test(s)
+    ? Buffer.from(s, "hex")
+    : crypto.createHash("sha256").update(s, "utf8").digest();
+}
+
+function keysEqual(a, b) {
+  return a && b && a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function getEncryptKeyBuffer() {
   if (cachedKeyBuffer !== KEY_CACHE_UNSET) {
     return cachedKeyBuffer;
   }
@@ -36,18 +49,16 @@ function getKeyBuffer() {
 
   const env = process.env.MESSAGES_CONTENT_KEY;
   if (env != null && String(env).trim() !== "") {
-    const s = String(env).trim();
-    cachedKeyBuffer = /^[0-9a-fA-F]{64}$/.test(s)
-      ? Buffer.from(s, "hex")
-      : crypto.createHash("sha256").update(s, "utf8").digest();
+    cachedKeyBuffer = parseKeyString(env);
     return cachedKeyBuffer;
   }
 
   try {
     if (fs.existsSync(LOCAL_KEY_FILE)) {
       const raw = fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim();
-      if (/^[0-9a-fA-F]{64}$/.test(raw)) {
-        cachedKeyBuffer = Buffer.from(raw, "hex");
+      const fileKey = parseKeyString(raw);
+      if (fileKey) {
+        cachedKeyBuffer = fileKey;
         return cachedKeyBuffer;
       }
     }
@@ -75,12 +86,56 @@ function getKeyBuffer() {
   }
 }
 
+function getDecryptKeyBuffers() {
+  if (cachedDecryptKeys) return cachedDecryptKeys;
+
+  const list = [];
+  const pushKey = (buf) => {
+    if (!buf) return;
+    if (!list.some((k) => keysEqual(k, buf))) list.push(buf);
+  };
+
+  pushKey(parseKeyString(process.env.MESSAGES_CONTENT_KEY));
+
+  const legacy = String(process.env.MESSAGES_CONTENT_LEGACY_KEYS || "");
+  if (legacy.trim()) {
+    for (const part of legacy.split(",")) {
+      pushKey(parseKeyString(part));
+    }
+  }
+
+  try {
+    if (fs.existsSync(LOCAL_KEY_FILE)) {
+      pushKey(parseKeyString(fs.readFileSync(LOCAL_KEY_FILE, "utf8").trim()));
+    }
+  } catch (_) {
+    /* ignore */
+  }
+
+  cachedDecryptKeys = list;
+  return list;
+}
+
 function isCiphertext(value) {
   return typeof value === "string" && value.startsWith(PREFIX);
 }
 
+function decryptWithKey(stored, key) {
+  const raw = Buffer.from(stored.slice(PREFIX.length), "base64");
+  if (raw.length < IV_LEN + TAG_LEN) {
+    throw new Error("Некорректный формат зашифрованного сообщения.");
+  }
+
+  const iv = raw.subarray(0, IV_LEN);
+  const tag = raw.subarray(IV_LEN, IV_LEN + TAG_LEN);
+  const data = raw.subarray(IV_LEN + TAG_LEN);
+  const decipher = crypto.createDecipheriv(ALGO, key, iv, { authTagLength: TAG_LEN });
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+}
+
 function encryptMessageContentForDb(plain) {
-  const key = getKeyBuffer();
+  const key = getEncryptKeyBuffer();
   if (!key) return String(plain ?? "");
 
   const text = String(plain ?? "");
@@ -95,24 +150,23 @@ function decryptMessageContentFromDb(stored) {
   const s = String(stored ?? "");
   if (!isCiphertext(s)) return s;
 
-  const key = getKeyBuffer();
-  if (!key) {
+  const keys = getDecryptKeyBuffers();
+  if (!keys.length) {
     throw new Error(
-      "В БД зашифрованные сообщения (CHARITOR_ENC_V1), но ключ недоступен: задайте MESSAGES_CONTENT_KEY в .env или восстановите файл .messages-content.key в корне проекта.",
+      "В БД зашифрованные сообщения (CHARITOR_ENC_V1), но ключ недоступен: задайте MESSAGES_CONTENT_KEY в .env.",
     );
   }
 
-  const raw = Buffer.from(s.slice(PREFIX.length), "base64");
-  if (raw.length < IV_LEN + TAG_LEN) {
-    throw new Error("Некорректный формат зашифрованного сообщения.");
+  let lastErr = null;
+  for (const key of keys) {
+    try {
+      return decryptWithKey(s, key);
+    } catch (e) {
+      lastErr = e;
+    }
   }
 
-  const iv = raw.subarray(0, IV_LEN);
-  const tag = raw.subarray(IV_LEN, IV_LEN + TAG_LEN);
-  const data = raw.subarray(IV_LEN + TAG_LEN);
-  const decipher = crypto.createDecipheriv(ALGO, key, iv, { authTagLength: TAG_LEN });
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+  throw lastErr || new Error("Не удалось расшифровать сообщение.");
 }
 
 function decryptMessageRowsForApi(rows) {
@@ -155,7 +209,7 @@ function decryptMessageRowsForApi(rows) {
       console.error("messageContentCrypto: не удалось расшифровать сообщение id=%s", row.id, e);
       return {
         ...row,
-        content: "[не удалось расшифровать — проверьте MESSAGES_CONTENT_KEY на сервере]",
+        content: "…",
       };
     }
   });

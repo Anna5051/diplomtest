@@ -230,13 +230,21 @@ nav {
 
 @media (max-width: 768px) {
   nav {
-    flex-direction: column;
-    gap: 18px;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
   }
 
   .nav {
-    flex-wrap: wrap;
-    justify-content: center;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 10px;
+  }
+
+  .nav li a {
+    padding: 10px 16px;
+    font-size: 14px;
   }
 
   .register-page {

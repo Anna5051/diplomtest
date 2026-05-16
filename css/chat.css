@@ -2140,6 +2140,11 @@ body.chat-overlay-open .modal {
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   }
 
+  .chat-topbar .brand-link {
+    justify-self: start;
+    text-align: left;
+  }
+
   .brand-link {
     font-size: 16px;
     line-height: 1;
@@ -2161,10 +2166,41 @@ body.chat-overlay-open .modal {
   .chat-topbar-right {
     grid-column: 2;
     display: flex;
-    justify-content: flex-end;
+    justify-content: flex-end !important;
     align-items: center;
     gap: 8px;
     flex-wrap: nowrap;
+    width: auto !important;
+  }
+
+  .messages-box {
+    align-items: stretch;
+    width: 100%;
+  }
+
+  .message {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .message-bot {
+    flex-direction: row;
+    justify-content: flex-start;
+    align-self: stretch;
+  }
+
+  .message-user {
+    flex-direction: row-reverse;
+    justify-content: flex-end;
+    align-self: stretch;
+  }
+
+  .message-bot .message-stack {
+    max-width: min(88vw, 560px);
+  }
+
+  .message-user .message-stack {
+    max-width: min(88vw, 560px);
   }
 
   .persona-pill {
