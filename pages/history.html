@@ -6,6 +6,8 @@
   <title>История чатов — Charitor.ai</title>
   <link rel="stylesheet" href="../css/general.css" />
   <link rel="stylesheet" href="../css/history.css" />
+  <script src="/js/runtime-config.js"></script>
+  <script src="/js/api-base.js"></script>
   <script src="/js/notifications.js" defer></script>
 </head>
 <body>
@@ -218,7 +220,7 @@
       chatsGrid.innerHTML = "";
 
       try {
-        const response = await fetch(`http://localhost:3000/my-chats/${savedUser.id}`);
+        const response = await fetch(`${API_BASE}/my-chats/${savedUser.id}`);
 
         if (!response.ok) {
           throw new Error("Ошибка загрузки чатов");

@@ -6,6 +6,8 @@
     <title>Админ-панель — Charitor.ai</title>
     <link rel="stylesheet" href="/css/general.css" />
     <link rel="stylesheet" href="/css/admin.css" />
+    <script src="/js/runtime-config.js"></script>
+    <script src="/js/api-base.js"></script>
     <script src="/js/notifications.js" defer></script>
     <script src="/js/siteDialogs.js" defer></script>
   </head>
@@ -301,7 +303,7 @@
 
               try {
                 const res = await fetch(
-                  `http://localhost:3000/admin/users/${user.id}`,
+                  `${API_BASE}/admin/users/${user.id}`,
                   {
                     method: "PUT",
                     headers: authHeaders(),
@@ -336,7 +338,7 @@
 
               try {
                 const res = await fetch(
-                  `http://localhost:3000/admin/users/${user.id}/block`,
+                  `${API_BASE}/admin/users/${user.id}/block`,
                   {
                     method: "PUT",
                     headers: authHeaders(),
@@ -368,7 +370,7 @@
 
               try {
                 const res = await fetch(
-                  `http://localhost:3000/admin/users/${user.id}`,
+                  `${API_BASE}/admin/users/${user.id}`,
                   {
                     method: "DELETE",
                     headers: authHeaders(),
@@ -462,7 +464,7 @@
 
               try {
                 const res = await fetch(
-                  `http://localhost:3000/admin/bots/${bot.id}/block`,
+                  `${API_BASE}/admin/bots/${bot.id}/block`,
                   {
                     method: "PUT",
                     headers: authHeaders(),
@@ -491,7 +493,7 @@
 
               try {
                 const res = await fetch(
-                  `http://localhost:3000/admin/bots/${bot.id}`,
+                  `${API_BASE}/admin/bots/${bot.id}`,
                   {
                     method: "DELETE",
                     headers: authHeaders(),
@@ -534,7 +536,7 @@
         if (!proceed) return;
 
         try {
-          const res = await fetch(`http://localhost:3000/admin/reports/${report.id}/resolve`, {
+          const res = await fetch(`${API_BASE}/admin/reports/${report.id}/resolve`, {
             method: "PUT",
             headers: authHeaders(),
             body: JSON.stringify({ action }),
@@ -671,7 +673,7 @@
 
       async function loadUsers() {
         try {
-          const res = await fetch("http://localhost:3000/admin/users", {
+          const res = await fetch(`${API_BASE}/admin/users`, {
             headers: authHeaders(),
           });
 
@@ -687,7 +689,7 @@
 
       async function loadBots() {
         try {
-          const res = await fetch("http://localhost:3000/admin/bots", {
+          const res = await fetch(`${API_BASE}/admin/bots`, {
             headers: authHeaders(),
           });
 
@@ -703,7 +705,7 @@
 
       async function loadReports() {
         try {
-          const res = await fetch("http://localhost:3000/admin/reports", {
+          const res = await fetch(`${API_BASE}/admin/reports`, {
             headers: authHeaders(),
           });
           const data = await res.json();

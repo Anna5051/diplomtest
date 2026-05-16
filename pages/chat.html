@@ -6,6 +6,8 @@
   <title>Чат — Charitor.ai</title>
   <link rel="stylesheet" href="/css/general.css" />
   <link rel="stylesheet" href="/css/chat.css?v=charitor-quotes-conservative" />
+  <script src="/js/runtime-config.js"></script>
+  <script src="/js/api-base.js"></script>
   <script src="/js/notifications.js" defer></script>
   <script src="/js/roleplayParagraphs.js?v=charitor-quotes-fix2"></script>
 </head>
@@ -310,17 +312,6 @@
   </aside>
 
   <script>
-    let API_BASE =
-      typeof window !== "undefined" && window.location && window.location.origin
-        ? window.location.origin
-        : "http://127.0.0.1:3000";
-    if (
-      !API_BASE ||
-      API_BASE === "null" ||
-      (typeof API_BASE === "string" && API_BASE.startsWith("file:"))
-    ) {
-      API_BASE = "http://127.0.0.1:3000";
-    }
     const brandLink = document.querySelector(".brand-link");
     if (brandLink) {
       brandLink.href = localStorage.getItem("user")

@@ -6,6 +6,8 @@
     <title>Авторизация</title>
     <link rel="stylesheet" href="/css/general.css" />
     <link rel="stylesheet" href="/css/autorization.css" />
+    <script src="/js/runtime-config.js"></script>
+    <script src="/js/api-base.js"></script>
     <script src="/js/notifications.js" defer></script>
   </head>
 
@@ -101,7 +103,7 @@
         }
 
         try {
-          const response = await fetch("http://localhost:3000/login", {
+          const response = await fetch(`${API_BASE}/login`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

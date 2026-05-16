@@ -6,6 +6,8 @@
     <title>Создание персонажа — Charitor.ai</title>
     <link rel="stylesheet" href="/css/general.css" />
     <link rel="stylesheet" href="/css/create.css" />
+    <script src="/js/runtime-config.js"></script>
+    <script src="/js/api-base.js"></script>
     <script src="/js/notifications.js" defer></script>
     <script src="/js/siteDialogs.js" defer></script>
   </head>
@@ -654,7 +656,7 @@
         }
 
         try {
-          const response = await fetch("http://localhost:3000/all-bots");
+          const response = await fetch(`${API_BASE}/all-bots`);
           if (response.ok) {
             const data = await response.json();
             const bots = Array.isArray(data) ? data : [];
@@ -929,7 +931,7 @@
 
         try {
           const response = await fetch(
-            `http://localhost:3000/bot/${editBotId}`,
+            `${API_BASE}/bot/${editBotId}`,
           );
           const text = await response.text();
 
@@ -1043,7 +1045,7 @@
           let response;
 
           if (isEditMode) {
-            response = await fetch(`http://localhost:3000/bot/${editBotId}`, {
+            response = await fetch(`${API_BASE}/bot/${editBotId}`, {
               method: "PUT",
               headers: {
                 "Content-Type": "application/json",
@@ -1051,7 +1053,7 @@
               body: JSON.stringify(characterData),
             });
           } else {
-            response = await fetch("http://localhost:3000/create-bot", {
+            response = await fetch(`${API_BASE}/create-bot`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -1093,7 +1095,7 @@
 
         try {
           const response = await fetch(
-            `http://localhost:3000/bot/${editBotId}`,
+            `${API_BASE}/bot/${editBotId}`,
             {
               method: "DELETE",
               headers: {

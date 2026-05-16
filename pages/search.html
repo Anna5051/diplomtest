@@ -6,6 +6,8 @@
   <title>Поиск персонажей — Charitor.ai</title>
   <link rel="stylesheet" href="../css/general.css" />
   <link rel="stylesheet" href="../css/search.css" />
+  <script src="/js/runtime-config.js"></script>
+  <script src="/js/api-base.js"></script>
   <script src="/js/notifications.js" defer></script>
 </head>
 <body>
@@ -166,7 +168,6 @@
     const quickFilters = document.getElementById("quickFilters");
 
     let allBots = [];
-    const API_BASE_SEARCH = "http://localhost:3000";
     const favoriteBotIds = new Set();
     let activeTags = new Set();
     let isAllTagsSelected = false;
@@ -420,7 +421,7 @@
       if (!savedUser?.id) return;
       try {
         const response = await fetch(
-          `${API_BASE_SEARCH}/favorite-bots/${savedUser.id}`,
+          `${API_BASE}/favorite-bots/${savedUser.id}`,
         );
         const data = await response.json();
         if (response.ok && Array.isArray(data.bot_ids)) {
@@ -459,7 +460,7 @@
       const key = getFavoriteBotKey(botId);
       try {
         if (wantFavorite) {
-          const response = await fetch(`${API_BASE_SEARCH}/favorite-bots`, {
+          const response = await fetch(`${API_BASE}/favorite-bots`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ user_id: uid, bot_id: bid }),
@@ -470,7 +471,7 @@
           }
           favoriteBotIds.add(bid);
         } else {
-          const url = `${API_BASE_SEARCH}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
+          const url = `${API_BASE}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
           const response = await fetch(url, {
             method: "DELETE",
             headers: { "Content-Type": "application/json" },
@@ -759,7 +760,7 @@
           favoriteBotIds.clear();
         }
 
-        const response = await fetch(`${API_BASE_SEARCH}/all-bots`);
+        const response = await fetch(`${API_BASE}/all-bots`);
 
         if (!response.ok) {
           throw new Error("Ошибка загрузки персонажей");

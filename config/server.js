@@ -11,7 +11,9 @@ const { sanitizeBotTagsField } = require("./tagPolicy");
 const app = express();
 let currentHttpServer = null;
 
-const AUTO_SHUTDOWN_ON_NO_CLIENTS = process.env.AUTO_SHUTDOWN_ON_NO_CLIENTS !== "0";
+const AUTO_SHUTDOWN_ON_NO_CLIENTS =
+  process.env.AUTO_SHUTDOWN_ON_NO_CLIENTS !== "0" &&
+  process.env.NODE_ENV !== "production";
 const CLIENT_IDLE_SHUTDOWN_MS = Number(process.env.CLIENT_IDLE_SHUTDOWN_MS) || 15000;
 const activeClientTabs = new Map();
 let shutdownTimer = null;

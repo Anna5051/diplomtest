@@ -6,6 +6,8 @@
     <title>Профиль — Charitor.ai</title>
     <link rel="stylesheet" href="/css/general.css" />
     <link rel="stylesheet" href="/css/profile.css" />
+    <script src="/js/runtime-config.js"></script>
+    <script src="/js/api-base.js"></script>
     <script src="/js/notifications.js" defer></script>
     <script src="/js/siteDialogs.js" defer></script>
   </head>
@@ -296,7 +298,6 @@
       }
 
       let characters = [];
-      const API_BASE_PROFILE = "http://localhost:3000";
       const favoriteBotIds = new Set();
 
       function getFavoriteBotKeyProfile(botId) {
@@ -307,7 +308,7 @@
         favoriteBotIds.clear();
         if (!savedUser?.id) return;
         try {
-          const r = await fetch(`${API_BASE_PROFILE}/favorite-bots/${savedUser.id}`);
+          const r = await fetch(`${API_BASE}/favorite-bots/${savedUser.id}`);
           const data = await r.json();
           if (r.ok && Array.isArray(data.bot_ids)) {
             data.bot_ids.forEach((id) => {
@@ -339,7 +340,7 @@
         const key = getFavoriteBotKeyProfile(botId);
         try {
           if (wantFavorite) {
-            const r = await fetch(`${API_BASE_PROFILE}/favorite-bots`, {
+            const r = await fetch(`${API_BASE}/favorite-bots`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ user_id: uid, bot_id: bid }),
@@ -350,7 +351,7 @@
             }
             favoriteBotIds.add(bid);
           } else {
-            const url = `${API_BASE_PROFILE}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
+            const url = `${API_BASE}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
             const r = await fetch(url, {
               method: "DELETE",
               headers: { "Content-Type": "application/json" },
@@ -657,7 +658,7 @@
           }
 
           try {
-            const response = await fetch("http://localhost:3000/user/avatar", {
+            const response = await fetch(`${API_BASE}/user/avatar`, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
@@ -818,7 +819,7 @@
         if (!reason || !String(reason).trim()) return;
 
         try {
-          const response = await fetch("http://localhost:3000/reports", {
+          const response = await fetch(`${API_BASE}/reports`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -936,7 +937,7 @@
               if (!reason || !String(reason).trim()) return;
 
               try {
-                const response = await fetch("http://localhost:3000/reports/appeal", {
+                const response = await fetch(`${API_BASE}/reports/appeal`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
@@ -1014,7 +1015,7 @@
         }
 
         try {
-          const response = await fetch("http://localhost:3000/all-bots");
+          const response = await fetch(`${API_BASE}/all-bots`);
 
           if (!response.ok) {
             const text = await response.text();
@@ -1086,8 +1087,8 @@
 
         try {
           const endpoint = isExternalProfile
-            ? "http://localhost:3000/all-bots"
-            : `http://localhost:3000/my-bots/${savedUser.id}`;
+            ? `${API_BASE}/all-bots`
+            : `${API_BASE}/my-bots/${savedUser.id}`;
           const response = await fetch(endpoint);
 
           if (!response.ok) {

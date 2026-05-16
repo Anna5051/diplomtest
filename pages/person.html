@@ -6,6 +6,8 @@
   <title>Персоны — Charitor.ai</title>
   <link rel="stylesheet" href="/css/general.css" />
   <link rel="stylesheet" href="/css/person.css" />
+  <script src="/js/runtime-config.js"></script>
+  <script src="/js/api-base.js"></script>
   <script src="/js/notifications.js" defer></script>
   <script src="/js/siteDialogs.js" defer></script>
 </head>
@@ -122,7 +124,6 @@
   </div>
 
   <script>
-    const API_URL = "http://localhost:3000";
     const brandLink = document.querySelector(".brand");
     if (brandLink) {
       brandLink.href = localStorage.getItem("user")
@@ -291,7 +292,7 @@
 
     async function loadPersonas() {
       try {
-        const response = await fetch(`${API_URL}/personas/${savedUser.id}`);
+        const response = await fetch(`${API_BASE}/personas/${savedUser.id}`);
 
         if (!response.ok) {
           throw new Error("Ошибка загрузки персон");
@@ -329,13 +330,13 @@
         let response;
 
         if (currentEditId) {
-          response = await fetch(`${API_URL}/persona/${currentEditId}`, {
+          response = await fetch(`${API_BASE}/persona/${currentEditId}`, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
           });
         } else {
-          response = await fetch(`${API_URL}/persona`, {
+          response = await fetch(`${API_BASE}/persona`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -367,7 +368,7 @@
       if (!shouldDelete) return;
 
       try {
-        const response = await fetch(`${API_URL}/persona/${currentEditId}`, {
+        const response = await fetch(`${API_BASE}/persona/${currentEditId}`, {
           method: "DELETE",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ user_id: savedUser.id })

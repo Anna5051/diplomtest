@@ -6,6 +6,8 @@
     <title>Bot — Charitor.ai</title>
     <link rel="stylesheet" href="/css/general.css" />
     <link rel="stylesheet" href="/css/bot.css" />
+    <script src="/js/runtime-config.js"></script>
+    <script src="/js/api-base.js"></script>
     <script src="/js/notifications.js" defer></script>
     <script src="/js/siteDialogs.js" defer></script>
   </head>
@@ -392,7 +394,6 @@
       /** Пользователь нажал «Общаться без персоны» — следующий клик «Чат с…» ведёт в чат без персоны, а не в модалку */
       let explicitChatWithoutPersona = false;
 
-      const API_BASE_BOT = "http://localhost:3000";
       const favoriteBotIds = new Set();
 
       async function loadFavoriteBotIds() {
@@ -400,7 +401,7 @@
         if (!savedUser?.id) return;
         try {
           const response = await fetch(
-            `${API_BASE_BOT}/favorite-bots/${savedUser.id}`,
+            `${API_BASE}/favorite-bots/${savedUser.id}`,
           );
           const data = await response.json();
           if (response.ok && Array.isArray(data.bot_ids)) {
@@ -434,7 +435,7 @@
         if (!key) return false;
         try {
           if (wantFavorite) {
-            const response = await fetch(`${API_BASE_BOT}/favorite-bots`, {
+            const response = await fetch(`${API_BASE}/favorite-bots`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ user_id: uid, bot_id: bid }),
@@ -445,7 +446,7 @@
             }
             favoriteBotIds.add(bid);
           } else {
-            const url = `${API_BASE_BOT}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
+            const url = `${API_BASE}/favorite-bots?user_id=${encodeURIComponent(uid)}&bot_id=${encodeURIComponent(bid)}`;
             const response = await fetch(url, {
               method: "DELETE",
               headers: { "Content-Type": "application/json" },
@@ -961,7 +962,7 @@
         if (!savedUser?.id) return;
 
         try {
-          const response = await fetch(`http://localhost:3000/personas/${savedUser.id}`);
+          const response = await fetch(`${API_BASE}/personas/${savedUser.id}`);
           const data = await response.json();
           personas = Array.isArray(data) ? data : [];
 
@@ -1021,7 +1022,7 @@
         }
 
         try {
-          const response = await fetch(`http://localhost:3000/bot/${botId}`);
+          const response = await fetch(`${API_BASE}/bot/${botId}`);
 
           if (!response.ok) {
             const text = await response.text();
@@ -1199,7 +1200,7 @@
         if (!reason || !String(reason).trim()) return;
 
         try {
-          const response = await fetch("http://localhost:3000/reports", {
+          const response = await fetch(`${API_BASE}/reports`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

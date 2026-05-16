@@ -5,7 +5,11 @@
   "main": "config/server.js",
   "scripts": {
     "start": "node config/server.js",
+    "build": "node scripts/layero-build.js",
     "test:llm": "node scripts/test-llm.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "author": "",
   "license": "ISC",
