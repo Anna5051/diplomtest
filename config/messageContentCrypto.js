@@ -153,7 +153,10 @@ function decryptMessageRowsForApi(rows) {
       };
     } catch (e) {
       console.error("messageContentCrypto: не удалось расшифровать сообщение id=%s", row.id, e);
-      throw e;
+      return {
+        ...row,
+        content: "[не удалось расшифровать — проверьте MESSAGES_CONTENT_KEY на сервере]",
+      };
     }
   });
 }
