@@ -4,3 +4,9 @@ config/secrets/llm-api-key.txt
 node_modules/
 dist/
 .layero/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
