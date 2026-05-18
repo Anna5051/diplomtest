@@ -6,6 +6,17 @@ const {
   decryptMessageContentFromDb,
 } = require("./messageContentCrypto");
 const { structureRoleplayParagraphs } = require("../js/roleplayParagraphs");
+const {
+  ROLEPLAY_FORMAT_RULES_RU,
+  ROLEPLAY_FORMAT_REWRITE_HINT,
+  validateRoleplayFormatting,
+  hasFirstPersonOutsideSpeech,
+  hasUserAgencyViolation,
+  hasObviousRussianGrammarErrors,
+  isNearDuplicateOfHistory,
+  isNearDuplicateOfVariants,
+  normalizeForDuplicateCheck,
+} = require("./roleplayFormatRules");
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen2.5:3b";
@@ -53,21 +64,25 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
       "Давай детальную атмосферу: телесные реакции персонажа, мимику, голос, темп, детали окружения.",
       "Сохраняй атмосферу, развивай сцену и добавляй естественную динамику диалога.",
       "Пиши строго в третьем лице: персонаж описывается как 'он/она' или по имени.",
-      "Не переключайся на первое лицо персонажа ('я/мне/мой').",
+      "Запрещено «я/мне/мой» в повествовании, в *звёздочках* и в описании действий.",
+      'Слова «я/мне/мой» допустимы ТОЛЬКО внутри прямой речи в "лапках", когда персонаж говорит от себя.',
       "Ты генерируешь ТОЛЬКО реплику и действия персонажа, но НЕ пользователя.",
       "Строго запрещено описывать мысли, эмоции, слова и действия пользователя как свершившийся факт.",
       "Запрещены конструкции вида: 'ты сказала', 'ты сделал', 'ты подошел', 'ты улыбнулась', 'пользователь сделал'.",
       "Если нужно отреагировать на пользователя, ссылайся только на уже написанное им сообщение без дописывания новых действий.",
       "Можно описывать только реакцию персонажа на уже сказанное пользователем и предлагать пользователю выбор.",
       "Не вставляй реплики за пользователя и не дописывай продолжение его фраз.",
-      "Формат как в Janitor: 2–4 смысловых абзаца на ответ, НЕ дроби каждое предложение отдельно.",
-      "Описание действий — в *звёздочках* (можно в том же абзаце, что и повествование, если коротко).",
-      "Прямая речь — в «…»; короткое «её голос прозвучал…» / «— сказала она» пиши в том же абзаце, что и реплика, без лишнего разрыва.",
-      "НЕ начинай реплику с тире (—); кавычки в начале речи.",
-      "Запрещено: — Привет. Нужно: «Привет» (кавычки в начале реплики, без тире).",
+      "Не копируй и не пересказывай дословно прошлые сообщения чата — только новая реакция на последнюю реплику.",
+      "Не описывай тело, мимику и действия пользователя (ты/твой/твоя/за твоей спиной) — только персонаж и его реакция.",
+      "Формат как в Character.ai: 2–4 смысловых абзаца на ответ, НЕ дроби каждое предложение отдельно.",
+      'Прямая речь персонажа ВСЕГДА в двойных кавычках "…" (лапки), никогда «ёлочки».',
+      "НЕ начинай реплику с тире (—); сначала открывающая \", потом слова, затем закрывающая \".",
+      'Запрещено: — Привет. Нужно: "Привет".',
+      "Описание действий и атмосферы — обычным текстом от 3-го лица; жесты — в *звёздочках*, тоже от 3-го лица.",
+      "Мысли персонажа — *в звёздочках*, только от 3-го лица (не «я думаю», а «он думает» / «ей не по себе»).",
+      'Крик и сильные эмоции — ЗАГЛАВНЫМИ внутри реплики: "НЕТ! СТОЙ!"',
       "Запрещено описывать действия и мысли пользователя (ты стоишь, ты чувствуешь, перед тобой) — только персонаж и его реакция.",
       "Не заключай в кавычки описание сцены (её голос прозвучал…) — кавычки только для прямой речи персонажа.",
-      "Внутренние мысли персонажа — коротким абзацем в *звёздочках* (курсив).",
       "Чередуй: действие → речь → мысль → действие; между блоками всегда пустая строка.",
       "Если добавляешь действия в *...*, они должны быть логичными и простыми, без вычурных метафор.",
       "Не добавляй бессмысленный 'красивый хвост' в конце ответа.",
@@ -105,6 +120,8 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
       `Персона пользователя (учитывай стиль речи и роль в диалоге):\n${personaPrompt.trim()}`,
     );
   }
+
+  parts.push(ROLEPLAY_FORMAT_RULES_RU);
 
   return parts.join("\n\n");
 }
@@ -233,8 +250,54 @@ async function buildBotReplyFromHistory(
     history: mapMessagesToOllamaHistory(historyRows),
     regenerate: Boolean(flags.regenerate),
     swipeAlternative: Boolean(flags.swipe),
+    continuePartial: String(flags.continuePartial || "").trim(),
+    previousVariants: Array.isArray(flags.previousVariants)
+      ? flags.previousVariants.map((v) => String(v || "").trim()).filter(Boolean)
+      : [],
     runtimeConfig,
   });
+}
+
+function mergeMessageContinuation(partial, addition) {
+  const head = String(partial || "").trimEnd();
+  const tail = String(addition || "").trim();
+  if (!tail) return head;
+  if (!head) return finalizeBotReplyText(tail);
+  const sep = head.endsWith("\n") ? "" : "\n\n";
+  return finalizeBotReplyText(head + sep + tail);
+}
+
+function appendUniquenessInstruction(messages, previousVariants = []) {
+  const list = (previousVariants || []).map((v) => String(v || "").trim()).filter(Boolean);
+  if (!list.length) return messages;
+
+  const excerpt = list
+    .slice(-8)
+    .map((v, i) => `${i + 1}) ${v.slice(0, 280)}${v.length > 280 ? "…" : ""}`)
+    .join("\n\n");
+
+  return [
+    ...messages,
+    {
+      role: "user",
+      content: [
+        "Сгенерируй НОВЫЙ вариант ответа. Он должен заметно отличаться от уже данных:",
+        excerpt,
+        "Не копируй их дословно, не используй те же первые фразы и ту же структуру.",
+        "Другие слова, детали, порядок абзацев — но тот же формат и реакция на сцену.",
+      ].join("\n"),
+    },
+  ];
+}
+
+function buildVariantUniquenessHint(previousVariants = []) {
+  const list = (previousVariants || []).map((v) => String(v || "").trim()).filter(Boolean);
+  if (!list.length) return "";
+  const excerpt = list
+    .slice(-6)
+    .map((v, i) => `${i + 1}) ${v.slice(0, 220)}${v.length > 220 ? "…" : ""}`)
+    .join("\n");
+  return `Не повторяй и не перефразируй эти варианты:\n${excerpt}`;
 }
 
 function buildSamplingOptions(regenerate) {
@@ -360,7 +423,9 @@ async function polishRussianReply(
     "Убери откровенный сексуальный подтекст, порнографические и жестоко-насильственные подробности; оставь сцену безопасной для широкой аудитории.",
     "Убери мат и тяжёлую брань: замени на нейтральные слова или лёгкие междометия («блин», «чёрт», «капец»), без новых оскорблений.",
     "Полностью убери сексуальные и гендерные оскорбления (включая цитаты из реплики пользователя); их нельзя оставлять даже в кавычках или в устной речи персонажа.",
-    "Сохрани абзацы и разметку (*действия*, кавычки для речи); не сливай всё в один абзац.",
+    "Сохрани абзацы и разметку (*действия*, кавычки только для прямой речи); не сливай всё в один абзац.",
+    "Не копируй прошлые сообщения чата. Не описывай тело и действия пользователя.",
+    'В "лапках" только слова персонажа, не повествование.',
     "Верни только итоговый отредактированный текст.",
   ].join("\n");
 
@@ -544,30 +609,7 @@ function finalizeBotReplyText(text) {
 }
 
 function containsUserAgencyViolation(text, personaName = "") {
-  const value = String(text || "").toLowerCase();
-  if (!value.trim()) return false;
-  const safePersonaName = String(personaName || "").trim().toLowerCase();
-  const escapedPersonaName = safePersonaName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-  const patterns = [
-    /\bты\s+(стоишь|сидишь|находишь|чувствуешь|думаешь|видишь|можешь|должен|должна|замер|замерла)\b/i,
-    /\bты\s+(сказал|сказала|сделал|сделала|улыбнул[а-я]*|подош[её]л|подошла|взял|взяла|крикнул|крикнула|ответил|ответила|почувствовал|почувствовала)\b/i,
-    /\bты\s+(поднял[аи]?сь?|поднялся|поднялась|смотрел[аи]?|смотрела|дернул[аи]?|дернула|покраснел[аи]?|дрожал[аи]?|замолчал[аи]?|отвернул[аи]?сь?|вздохнул[аи]?|вздохнула)\b/i,
-    /\bперед тобой\b/i,
-    /\bвсё,?\s+что\s+(?:ты|находишь)\b/i,
-    /\bпользователь\s+(сказал|сказала|сделал|сделала|подош[её]л|подошла|улыбнул[а-я]*)\b/i,
-    /\b(?:она|он)\s+(сказал|сказала|сделал|сделала|начала|начал|пош[её]л|пошла|атаковал[а]?|ударил[а]?|отступил[а]?)\b/i,
-    /\bтво(?:й|я|и|ё)\s+(голос|взгляд|щеки|щёки|лицо|тело|рук[аи]|пальц[аы]|глаз[а]|губ[ы])\b/i,
-  ];
-  const hasGenericViolation = patterns.some((pattern) => pattern.test(value));
-
-  if (!escapedPersonaName) return hasGenericViolation;
-
-  const personaActionPattern = new RegExp(
-    `\\b${escapedPersonaName}\\b[^.!?\\n]{0,60}\\b(сказал|сказала|сделал|сделала|начала|начал|пош[её]л|пошла|атаковал[а]?|ударил[а]?|отступил[а]?|улыбнул[а-я]*)\\b`,
-    "i",
-  );
-  return hasGenericViolation || personaActionPattern.test(value);
+  return hasUserAgencyViolation(text, personaName);
 }
 
 function hasPoorRussianQuality(text) {
@@ -583,9 +625,7 @@ function hasPoorRussianQuality(text) {
 }
 
 function hasFirstPersonSelfReference(text) {
-  const value = String(text || "");
-  const lower = value.toLowerCase();
-  return /\b(я|мне|меня|мой|моя|моё|мои|мною|обо мне)\b/i.test(lower);
+  return hasFirstPersonOutsideSpeech(text);
 }
 
 function hasBadRoleplayStructure(text) {
@@ -598,6 +638,11 @@ function hasBadRoleplayStructure(text) {
     .filter(Boolean).length;
   if (sentenceCount < 2) return true;
   return false;
+}
+
+function hasBadDialogueFormatting(text) {
+  const structured = formatRoleplayReplyStructure(String(text || "").trim());
+  return !validateRoleplayFormatting(structured).ok;
 }
 
 function hasLogicalFlowIssues(text) {
@@ -736,55 +781,150 @@ function classifyUserPolicyViolation(text) {
   return null;
 }
 
-function normalizeForDuplicateCheck(text) {
-  return String(text || "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
 function isNearDuplicateOfRecentAssistant(text, history = []) {
-  const candidate = normalizeForDuplicateCheck(text);
-  if (!candidate || candidate.length < 40) return false;
-
-  const recentAssistantMessages = history
-    .filter((m) => m && m.role === "assistant")
-    .slice(-3)
-    .map((m) => normalizeForDuplicateCheck(m.content))
-    .filter(Boolean);
-
-  if (!recentAssistantMessages.length) return false;
-
-  return recentAssistantMessages.some((prev) => {
-    if (!prev) return false;
-    if (candidate === prev) return true;
-    if (candidate.includes(prev) || prev.includes(candidate)) {
-      const ratio = Math.min(candidate.length, prev.length) / Math.max(candidate.length, prev.length);
-      return ratio > 0.82;
-    }
-    return false;
-  });
+  return isNearDuplicateOfHistory(text, history);
 }
 
-function buildHardSafeFallbackReply() {
+function buildFallbackTemplates(who) {
+  const name = who;
   return [
-    "*Я делаю медленный вдох, удерживая взгляд и контролируя каждое движение.*",
-    "«Говори со мной прямо. Я отвечу честно и в своей манере, но не стану приписывать тебе того, чего ты не делала.»",
-    "*Я сохраняю дистанцию и жду твоего следующего шага, внимательно отслеживая каждую деталь ситуации.*",
+    () =>
+      [
+        `*${name} делает медленный вдох, удерживая взгляд и контролируя каждое движение.*`,
+        '"Говори со мной прямо, я отвечу честно и в своей манере, но не стану приписывать тебе того, чего ты не делала."',
+        `*${name} сохраняет дистанцию и ждёт следующего шага, внимательно отслеживая каждую деталь ситуации.*`,
+      ].join("\n\n"),
+    () =>
+      [
+        `*${name} чуть наклоняет голову, взвешивая слова собеседника.*`,
+        '"Я слышу тебя. Скажи, что для тебя сейчас важнее всего — и я отвечу без лишних уловок."',
+        `*Пауза затягивается, но ${name} не спешит: сцена требует точности, а не шума.*`,
+      ].join("\n\n"),
+    () =>
+      [
+        `*Взгляд ${name} становится внимательнее, будто он заново прикидывает расстояние между вами.*`,
+        '"Хорошо. Давай без недомолвок: я отвечу, но только на то, что ты уже сказала."',
+        `*${name} отводит плечи на полшага назад, оставляя тебе пространство для следующей реплики.*`,
+      ].join("\n\n"),
+    () =>
+      [
+        `*${name} скользит взглядом по комнате и снова возвращает его к собеседнику.*`,
+        '"Если хочешь продолжения — говори яснее. Я не стану додумывать за тебя."',
+        `*Тон остаётся ровным, но в нём чувствуется собранность и готовность услышать ответ.*`,
+      ].join("\n\n"),
+    () =>
+      [
+        `*Пальцы ${name} касаются края стола — жест сдержанный, почти незаметный.*`,
+        '"Слушаю. Ответ будет прямым, но не буду навязывать тебе то, чего ты не говорила."',
+        `*${name} выдерживает тишину, давая словам зазвучать, прежде чем снова заговорить.*`,
+      ].join("\n\n"),
+    () =>
+      [
+        `*${name} чуть прищуривается, словно проверяя, насколько искренним был вопрос.*`,
+        '"Ладно. Скажи, чего ты ждёшь от меня сейчас — и я скажу, что думаю."',
+        `*${name} не торопит разговор, но и не отпускает напряжение момента.*`,
+      ].join("\n\n"),
+  ];
+}
+
+function buildHardSafeFallbackReply(botName = "", previousVariants = [], seed = 0) {
+  const who = String(botName || "").trim() || "Он";
+  const templates = buildFallbackTemplates(who);
+  const avoid = (previousVariants || []).map((v) => normalizeForDuplicateCheck(v)).filter(Boolean);
+  const start =
+    seed === null || seed === undefined
+      ? Math.abs(Date.now()) % templates.length
+      : Math.abs(Number(seed)) % templates.length;
+
+  for (let offset = 0; offset < templates.length; offset += 1) {
+    const candidate = templates[(start + offset) % templates.length]();
+    const norm = normalizeForDuplicateCheck(candidate);
+    const duplicate = avoid.some(
+      (prev) =>
+        prev === norm ||
+        (norm.length > 40 &&
+          prev.length > 40 &&
+          (norm.includes(prev) || prev.includes(norm)) &&
+          Math.min(norm.length, prev.length) / Math.max(norm.length, prev.length) > 0.7),
+    );
+    if (!duplicate) return candidate;
+  }
+
+  const tail = [
+    "словно заново оценивает тон разговора",
+    "прислушиваясь к паузе между вами",
+    "не спеша выбирая следующую интонацию",
+  ][Math.abs(seed) % 3];
+  return [
+    templates[start % templates.length](),
+    `*${who} на мгновение замирает, ${tail}.*`,
   ].join("\n\n");
 }
 
-function isReplyAcceptable(text, botName, personaName, history = []) {
+function isReplyAcceptable(text, botName, personaName, history = [], previousVariants = []) {
+  const structured = formatRoleplayReplyStructure(String(text || "").trim());
   return (
-    !containsAdultOrExplicitSignals(text) &&
-    !textContainsHardSexualSlur(text) &&
-    !containsUserAgencyViolation(text, personaName) &&
-    !hasFirstPersonSelfReference(text) &&
-    !hasBadRoleplayStructure(text) &&
-    !hasLogicalFlowIssues(text) &&
-    !hasPoorRussianQuality(text) &&
-    !isNearDuplicateOfRecentAssistant(text, history)
+    !containsAdultOrExplicitSignals(structured) &&
+    !textContainsHardSexualSlur(structured) &&
+    !containsUserAgencyViolation(structured, personaName) &&
+    !hasFirstPersonSelfReference(structured) &&
+    !hasBadRoleplayStructure(structured) &&
+    !hasBadDialogueFormatting(structured) &&
+    !hasLogicalFlowIssues(structured) &&
+    !hasPoorRussianQuality(structured) &&
+    !hasObviousRussianGrammarErrors(structured) &&
+    !isNearDuplicateOfRecentAssistant(structured, history) &&
+    !isNearDuplicateOfVariants(structured, previousVariants)
+  );
+}
+
+async function ensureMinimumReplyQuality(
+  model,
+  baseMessages,
+  draftReply,
+  botName,
+  personaName,
+  samplingOptions = {},
+  runtimeConfig = {},
+  previousVariants = [],
+) {
+  let reply = finalizeBotReplyText(draftReply);
+  if (isReplyAcceptable(reply, botName, personaName, baseMessages, previousVariants)) {
+    return reply;
+  }
+
+  const lastUserMessage = getLastUserMessageFromHistory(baseMessages);
+  const uniqueHint = buildVariantUniquenessHint(previousVariants);
+  const fixHint = [
+    "Полностью перепиши ответ. Исправь всё:",
+    "— не копируй и не повторяй прошлые сообщения чата;",
+    "— не описывай тело и действия пользователя (ты, твой, твоя, за твоей спиной);",
+    '— в "лапках" только прямая речь персонажа, не описание сцены;',
+    `— ${ROLEPLAY_FORMAT_REWRITE_HINT}`,
+    `— логично ответь на последнюю реплику: "${lastUserMessage || "..."}"`,
+    "— грамотный русский, без случайных фраз.",
+    uniqueHint,
+    "Верни только текст ответа.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const fixed = await requestOllamaChat(
+    model,
+    [
+      ...baseMessages,
+      { role: "assistant", content: reply },
+      { role: "user", content: fixHint },
+    ],
+    { ...samplingOptions, temperature: 0.42, top_p: 0.88 },
+    runtimeConfig,
+  );
+  reply = finalizeBotReplyText(fixed);
+  if (isReplyAcceptable(reply, botName, personaName, baseMessages, previousVariants)) {
+    return reply;
+  }
+  return finalizeBotReplyText(
+    buildHardSafeFallbackReply(botName, [...previousVariants, reply], previousVariants.length + 1),
   );
 }
 
@@ -796,26 +936,28 @@ async function enforceReplyQuality(
   personaName,
   samplingOptions = {},
   runtimeConfig = {},
+  previousVariants = [],
 ) {
   let currentReply = String(draftReply || "").trim();
   let attempts = 0;
 
   while (
     attempts < MAX_REPLY_REWRITE_ATTEMPTS &&
-    !isReplyAcceptable(currentReply, botName, personaName, baseMessages)
+    !isReplyAcceptable(currentReply, botName, personaName, baseMessages, previousVariants)
   ) {
     const lastUserMessage = getLastUserMessageFromHistory(baseMessages);
     const rewriteInstruction = [
       "Перепиши ответ строго по правилам.",
-      "1) Пиши ТОЛЬКО в третьем лице: персонаж как 'он/она' или по имени; не используй 'я/мне/мой'.",
+      "1) Повествование и *действия* — только 3-е лицо (он/она/имя); «я/мне/мой» только внутри \"прямой речи\".",
       "2) Не пиши за пользователя и не описывай его действия как факт.",
       `2.1) Не используй имя персоны пользователя "${String(personaName || "").trim()}" в связке с глаголами действий.`,
-      "3) Формат: короткие абзацы через пустую строку; *действия*; речь в кавычках; не один сплошной абзац.",
+      `3) Формат: ${ROLEPLAY_FORMAT_REWRITE_HINT}`,
       `3.1) Обязательно дай прямую реакцию на последнюю реплику пользователя: "${lastUserMessage || "..."}.`,
       "3.2) Первые 1-2 предложения должны логически отвечать именно на неё.",
       "4) Исправь русский язык: орфография, пунктуация, логика.",
       "4.1) Убери корявые и случайные словосочетания; текст должен читаться естественно для носителя русского.",
-      "4.2) Не повторяй дословно и почти дословно предыдущие реплики персонажа.",
+      "4.2) Не повторяй дословно и почти дословно предыдущие реплики персонажа и уже выданные варианты.",
+      buildVariantUniquenessHint(previousVariants),
       "4.3) Полный запрет описывать действия/эмоции/состояние пользователя (включая конструкции с 'ты...' и 'твой/твоя/...').",
       "4.4) Запрещены вычурные, бессмысленные или случайные метафоры в финале.",
       "4.5) Запрещено повторять одну и ту же длинную фразу дважды в одном ответе.",
@@ -824,7 +966,9 @@ async function enforceReplyQuality(
       "4.8) Убери любые сексуальные и гендерные оскорбления (шлюха, проститутка и т.п.), в том числе если пользователь написал их в адрес персонажа — не цитируй и не повторяй их.",
       "5) Сохрани атмосферу сцены и характер персонажа.",
       "6) Верни только итоговый ответ без пояснений.",
-    ].join("\n");
+    ]
+      .filter(Boolean)
+      .join("\n");
 
     currentReply = await requestOllamaChat(
       model,
@@ -839,14 +983,15 @@ async function enforceReplyQuality(
     attempts += 1;
   }
 
-  if (!isReplyAcceptable(currentReply, botName, personaName, baseMessages)) {
+  if (!isReplyAcceptable(currentReply, botName, personaName, baseMessages, previousVariants)) {
     const lastUserMessage = getLastUserMessageFromHistory(baseMessages);
     const variantHint = [
       "Сгенерируй новый вариант ответа на последнюю реплику пользователя.",
       `Последняя реплика пользователя: "${lastUserMessage || "..."}".`,
       "Сначала отреагируй на неё по смыслу, затем развивай сцену.",
       "Другие слова, образы и детали — не копируй и не перефразируй дословно предыдущие черновики.",
-      "Формат: абзацы через пустую строку, *действия*, речь в кавычках; 3-е лицо о персонаже.",
+      buildVariantUniquenessHint([...previousVariants, currentReply]),
+      `Формат: ${ROLEPLAY_FORMAT_REWRITE_HINT} Третье лицо о персонаже.`,
       "Только третье лицо о персонаже; не пиши за пользователя.",
       "Строго без откровенного секса, порнографии и графического насилия — только контент для широкой аудитории.",
       "Без мата и без сексуальных/гендерных оскорблений; не повторяй оскорбления из реплики пользователя.",
@@ -873,10 +1018,16 @@ async function enforceReplyQuality(
       runtimeConfig,
     );
     const refined = String(fresh || "").trim();
-    if (isReplyAcceptable(refined, botName, personaName, baseMessages)) {
+    if (isReplyAcceptable(refined, botName, personaName, baseMessages, previousVariants)) {
       return refined;
     }
-    return buildHardSafeFallbackReply();
+    return finalizeBotReplyText(
+      buildHardSafeFallbackReply(
+        botName,
+        [...previousVariants, currentReply, refined],
+        previousVariants.length + 2,
+      ),
+    );
   }
 
   return currentReply;
@@ -890,8 +1041,11 @@ async function generateBotReply({
   history,
   regenerate = false,
   swipeAlternative = false,
+  continuePartial = "",
+  previousVariants = [],
   runtimeConfig = {},
 }) {
+  const knownVariants = (previousVariants || []).map((v) => String(v || "").trim()).filter(Boolean);
   let samplingOptions = buildSamplingOptions(regenerate);
   if (Number.isFinite(Number(runtimeConfig?.temperature))) {
     samplingOptions = {
@@ -906,16 +1060,17 @@ async function generateBotReply({
     };
   }
   if (swipeAlternative) {
+    const variantBoost = Math.min(0.12, knownVariants.length * 0.02);
     samplingOptions = {
       ...samplingOptions,
       temperature: Math.min(
         0.98,
-        (samplingOptions.temperature ?? OLLAMA_TEMPERATURE) + 0.14,
+        (samplingOptions.temperature ?? OLLAMA_TEMPERATURE) + 0.14 + variantBoost,
       ),
       top_p: Math.max(samplingOptions.top_p ?? OLLAMA_TOP_P, 0.92),
       repeat_penalty: Math.min(
-        1.34,
-        (samplingOptions.repeat_penalty ?? OLLAMA_REPEAT_PENALTY) + 0.08,
+        1.38,
+        (samplingOptions.repeat_penalty ?? OLLAMA_REPEAT_PENALTY) + 0.08 + variantBoost,
       ),
     };
   }
@@ -924,23 +1079,70 @@ async function generateBotReply({
   const chatModel =
     String(runtimeConfig?.model || "").trim() || OLLAMA_MODEL;
 
-  const messages = buildMessagesForLlmApi(
+  let messages = buildMessagesForLlmApi(
     botSystemPrompt,
     personaPrompt,
     botName,
     customPrompt,
     history,
   );
+  if ((regenerate || swipeAlternative) && knownVariants.length) {
+    messages = appendUniquenessInstruction(messages, knownVariants);
+  }
 
-  // Chutes / OpenRouter: как Janitor — один запрос, без цепочки переписываний (иначе 429)
+  const partialText = String(continuePartial || "").trim();
+  if (partialText) {
+    messages = [
+      ...messages,
+      { role: "assistant", content: partialText },
+      {
+        role: "user",
+        content: [
+          "Продолжи этот же ответ персонажа с места, где он оборвался.",
+          "Выведи ТОЛЬКО новый фрагмент — без повтора уже написанного текста.",
+          ROLEPLAY_FORMAT_REWRITE_HINT,
+          "Не начинай ответ заново. Не добавляй действия и реплики за пользователя.",
+        ].join(" "),
+      },
+    ];
+
+    const continuationDraft = await requestOllamaChat(
+      chatModel,
+      messages,
+      {
+        ...samplingOptions,
+        temperature: Math.min(0.9, (samplingOptions.temperature ?? OLLAMA_TEMPERATURE) + 0.08),
+      },
+      runtimeConfig,
+    );
+    const polished = await polishRussianReply(
+      chatModel,
+      messages,
+      continuationDraft,
+      samplingOptions,
+      runtimeConfig,
+    );
+    return finalizeBotReplyText(String(polished || "").trim());
+  }
+
+  // Прокси: один основной запрос + при необходимости одна правка (без длинной цепочки).
   if (usingProxy) {
-    const reply = await requestOllamaChat(
+    const draft = await requestOllamaChat(
       chatModel,
       messages,
       samplingOptions,
       runtimeConfig,
     );
-    return finalizeBotReplyText(reply);
+    return ensureMinimumReplyQuality(
+      chatModel,
+      messages,
+      draft,
+      botName,
+      personaName,
+      samplingOptions,
+      runtimeConfig,
+      knownVariants,
+    );
   }
 
   try {
@@ -954,8 +1156,9 @@ async function generateBotReply({
       personaName,
       samplingOptions,
       runtimeConfig,
+      knownVariants,
     );
-    if (isReplyAcceptable(reply, botName, personaName, messages)) {
+    if (isReplyAcceptable(reply, botName, personaName, messages, knownVariants)) {
       return finalizeBotReplyText(reply);
     }
 
@@ -968,7 +1171,7 @@ async function generateBotReply({
       {
         role: "user",
         content:
-          "Сделай ответ значительно более развернутым и атмосферным: добавь эмоции, реакцию персонажа, детали сцены и плавное развитие диалога. Разбей на короткие абзацы через пустую строку: *действия*, речь в кавычках, мысли в *звёздочках*. Не сокращай. Не добавляй текст и действия за пользователя. Без откровенного секса, порнографии и жестокого насилия. Без мата и без сексуальных/гендерных оскорблений — не повторяй брань из реплики пользователя; только лёгкие междометия при необходимости.",
+          `Сделай ответ значительно более развернутым и атмосферным: эмоции, реакция персонажа, детали сцены. ${ROLEPLAY_FORMAT_REWRITE_HINT} Не сокращай. Не добавляй текст и действия за пользователя. Без откровенного секса, порнографии и жестокого насилия. Без мата и без сексуальных/гендерных оскорблений — не повторяй брань из реплики пользователя; только лёгкие междометия при необходимости.`,
       },
     ];
 
@@ -993,6 +1196,7 @@ async function generateBotReply({
       personaName,
       samplingOptions,
       runtimeConfig,
+      knownVariants,
     );
     return finalizeBotReplyText(expanded);
   } catch (primaryError) {
@@ -1024,8 +1228,9 @@ async function generateBotReply({
       personaName,
       samplingOptions,
       runtimeConfig,
+      knownVariants,
     );
-    if (isReplyAcceptable(fallbackReply, botName, personaName, messages)) {
+    if (isReplyAcceptable(fallbackReply, botName, personaName, messages, knownVariants)) {
       return finalizeBotReplyText(fallbackReply);
     }
 
@@ -1062,6 +1267,7 @@ async function generateBotReply({
       personaName,
       samplingOptions,
       runtimeConfig,
+      knownVariants,
     );
     return finalizeBotReplyText(fallbackExpandedChecked);
   }
@@ -1085,6 +1291,13 @@ module.exports = {
   getPromptSection,
   buildBotReplyFromHistory,
   generateBotReply,
+  mergeMessageContinuation,
+  finalizeBotReplyText,
+  buildHardSafeFallbackReply,
+  validateRoleplayFormatting,
+  hasFirstPersonOutsideSpeech,
+  hasUserAgencyViolation,
+  isNearDuplicateOfHistory,
   FILTERED_BOT_MESSAGE_PLACEHOLDER,
   classifyUserPolicyViolation,
 };

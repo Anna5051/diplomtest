@@ -10,6 +10,7 @@
     <script src="/js/api-base.js"></script>
     <script src="/js/notifications.js" defer></script>
     <script src="/js/siteDialogs.js" defer></script>
+    <script src="/js/imageLightbox.js" defer></script>
   </head>
   <body>
     <header class="topbar">
@@ -48,7 +49,7 @@
           <img
             src="/img/icon.svg"
             alt="bot avatar"
-            class="bot-main-image"
+            class="bot-main-image avatar-zoomable"
             id="botAvatar"
           />
         </div>
@@ -123,7 +124,7 @@
                 aria-controls="chatPersonaModal"
               >
                 <img
-                  class="persona-playing-avatar"
+                  class="persona-playing-avatar avatar-zoomable"
                   id="playingAsAvatar"
                   src="/img/icon.svg"
                   alt=""
@@ -848,7 +849,7 @@
           item.setAttribute("role", "button");
           item.tabIndex = 0;
           item.innerHTML = `
-            <img src="${escapeHtml(persona.avatar_url || "/img/icon.svg")}" alt="">
+            <img class="avatar-zoomable" src="${escapeHtml(persona.avatar_url || "/img/icon.svg")}" alt="">
             <div class="persona-modal-row-main">
               <strong>${escapeHtml(persona.name || "Без имени")}</strong>
               <span class="persona-modal-row-desc">${escapeHtml(shortDesc)}</span>

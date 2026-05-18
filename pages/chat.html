@@ -5,10 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Чат — Charitor.ai</title>
   <link rel="stylesheet" href="/css/general.css" />
-  <link rel="stylesheet" href="/css/chat.css?v=charitor-quotes-conservative" />
+  <link rel="stylesheet" href="/css/chat.css?v=charitor-action-btn-no-square" />
   <script src="/js/runtime-config.js"></script>
   <script src="/js/api-base.js"></script>
   <script src="/js/notifications.js" defer></script>
+  <script src="/js/imageLightbox.js" defer></script>
   <script src="/js/roleplayParagraphs.js?v=charitor-quotes-fix2"></script>
 </head>
 
@@ -112,7 +113,7 @@
 
     <section class="chat-wrapper">
       <div class="bot-intro">
-        <img id="chatBotAvatar" src="/img/icon.svg" alt="bot avatar" />
+        <img id="chatBotAvatar" class="avatar-zoomable" src="/img/icon.svg" alt="bot avatar" />
 
         <div>
           <h1 id="chatBotName">Загрузка...</h1>
@@ -139,7 +140,7 @@
             id="chatInputPersonaBtn"
             title="Выбрать персону"
           >
-            <img id="chatInputPersonaAvatar" src="/img/icon.svg" alt="" />
+            <img id="chatInputPersonaAvatar" class="avatar-zoomable" src="/img/icon.svg" alt="" />
             <span id="chatInputPersonaName">Персона</span>
             <span class="chat-input-persona-chevron" aria-hidden="true">▾</span>
           </button>
@@ -183,20 +184,6 @@
         <button type="button" class="api-settings-tab" data-api-tab="style">Стиль</button>
       </nav>
       <div class="api-settings-scroll">
-        <details class="api-global-prompt" open>
-          <summary>Глобальный промпт</summary>
-          <p class="api-field-hint">
-            Добавляется к каждому ответу бота вместе с пресетом стиля. Пишите коротко: тон, табу, формат реплик.
-          </p>
-          <p class="api-field-hint api-field-hint--example">
-            Пример: «2–4 предложения, нежный тон, без списков, не описывай действия пользователя как факт».
-          </p>
-          <textarea
-            id="globalPromptInput"
-            rows="4"
-            placeholder="Например: романтичный тон, больше эмоций, без грубости…"
-          ></textarea>
-        </details>
         <div class="api-settings-panels">
           <section class="api-settings-panel active" data-api-panel="builtin" aria-labelledby="apiPanelBuiltinTitle">
             <h3 id="apiPanelBuiltinTitle" class="api-panel-title">Встроенная (бесплатно)</h3>
@@ -265,11 +252,26 @@
             <h3 id="apiPanelStyleTitle" class="api-panel-title">Стиль и генерация</h3>
             <p class="api-panel-desc">Применяется к следующим сообщениям сразу. «Сохранить» — запомнить в браузере. Чат слева можно использовать без закрытия панели.</p>
 
+            <details class="api-global-prompt" open>
+              <summary>Глобальный промпт</summary>
+              <p class="api-field-hint">
+                Добавляется к каждому ответу бота вместе с пресетом стиля. Пишите коротко: тон, табу, формат реплик.
+              </p>
+              <p class="api-field-hint api-field-hint--example">
+                Повествование и *действия* — только 3-е лицо; «я» только в "речи"; крик — ЗАГЛАВНЫМИ.
+              </p>
+              <textarea
+                id="globalPromptInput"
+                rows="4"
+                placeholder='3-е лицо в *действиях*; «я» только в "речи"; 2–4 абзаца.'
+              ></textarea>
+            </details>
+
             <details class="api-collapsible" open>
               <summary>Пресет характера</summary>
               <div class="api-collapsible-body">
                 <p class="api-field-hint">
-                  Готовый тон общения: романтика, флирт, драма и т.д. Можно дополнить своим глобальным промптом выше.
+                  Готовый тон общения: романтика, флирт, драма и т.д. Можно дополнить глобальным промптом в этом разделе.
                 </p>
                 <div id="stylePresetPicker" class="style-preset-picker" role="listbox" aria-label="Пресет стиля"></div>
               </div>
@@ -1513,28 +1515,6 @@
       proxyConfigsList.innerHTML = "";
       updateProxyConfigCount();
 
-      const builtinRow = document.createElement("div");
-      builtinRow.className = isUsingBuiltinLlm()
-        ? "proxy-config-row proxy-config-row--builtin active"
-        : "proxy-config-row proxy-config-row--builtin";
-      builtinRow.innerHTML = `
-        <div class="proxy-config-main">
-          <strong>Встроенная (бесплатно)</strong>
-          <span>${escapeHtml(getBuiltinLlmDescription())}</span>
-        </div>
-        <div class="proxy-config-actions">
-          <span class="proxy-row-selected-mark" aria-hidden="true">✓</span>
-        </div>
-      `;
-      builtinRow.dataset.proxySelect = "builtin";
-      builtinRow.setAttribute("role", "button");
-      builtinRow.setAttribute("tabindex", "0");
-      builtinRow.setAttribute(
-        "aria-pressed",
-        isUsingBuiltinLlm() ? "true" : "false",
-      );
-      proxyConfigsList.appendChild(builtinRow);
-
       if (!proxyConfigs.length) {
         const empty = document.createElement("div");
         empty.className = "persona-empty";
@@ -1812,7 +1792,7 @@
         item.dataset.expanded = "0";
 
         item.innerHTML = `
-          <img src="${escapeHtml(persona.avatar_url || "/img/icon.svg")}" alt="persona" />
+          <img class="avatar-zoomable" src="${escapeHtml(persona.avatar_url || "/img/icon.svg")}" alt="persona" />
 
           <div class="persona-option-info">
             <strong>${escapeHtml(persona.name)}</strong>
@@ -1935,8 +1915,10 @@
             await animateBubbleSwipeReplace(bubble, merged.content);
             const hdr = row.querySelector(".message-card-header-actions");
             if (hdr) hdr.innerHTML = buildMessageHeaderAreaHtml(merged);
-            stack.querySelector(".message-bubble-footer")?.remove();
-            bubble.insertAdjacentHTML(
+            const contentCol =
+              stack.closest(".message-content-col") || stack.parentElement;
+            contentCol?.querySelector(".message-bubble-footer")?.remove();
+            stack.insertAdjacentHTML(
               "afterend",
               `<div class="message-bubble-footer">${buildMessageFooterActions(merged)}</div>`,
             );
@@ -1957,6 +1939,73 @@
         }
         delete messageRows[idx]._loading;
         rerenderMessages();
+        throw error;
+      } finally {
+        stopAiBusy();
+      }
+    }
+
+    function setBotMessageFooterBusy(messageId, busy) {
+      const row = findMessageRow(messageId);
+      const footer = row?.querySelector(".message-bubble-footer");
+      if (!footer) return;
+      footer.classList.toggle("message-bubble-footer--busy", Boolean(busy));
+      footer.querySelectorAll("button").forEach((btn) => {
+        btn.disabled = Boolean(busy);
+      });
+    }
+
+    function refreshBotMessageChrome(messageId, message) {
+      const row = findMessageRow(messageId);
+      if (!row) return;
+      const hdr = row.querySelector(".message-card-header-actions");
+      if (hdr) hdr.innerHTML = buildMessageHeaderAreaHtml(message);
+      const contentCol = row.querySelector(".message-content-col--bot");
+      contentCol?.querySelector(".message-bubble-footer")?.remove();
+      const footerHtml = buildMessageFooterActions(message);
+      if (footerHtml && contentCol) {
+        contentCol.insertAdjacentHTML(
+          "beforeend",
+          `<div class="message-bubble-footer">${footerHtml}</div>`,
+        );
+      }
+    }
+
+    async function runBotMessageContinue(messageId) {
+      const idx = messageRows.findIndex((item) => Number(item.id) === messageId);
+      if (idx === -1) return;
+      if (messageRows[idx]._continuing) return;
+
+      await commitPendingSwipeVariantsBeforeSend();
+
+      const row = findMessageRow(messageId);
+      const bubble = row?.querySelector(".message-bubble");
+      if (!bubble) return;
+
+      messageRows[idx] = { ...messageRows[idx], _continuing: true };
+      setBotMessageFooterBusy(messageId, true);
+
+      const signal = startAiBusy();
+
+      try {
+        const data = await continueMessageOnServer(messageId, signal);
+        const merged = { ...messageRows[idx], ...data.reply };
+        delete merged._continuing;
+        delete merged._contentVariants;
+        delete merged._variantIndex;
+        messageRows[idx] = merged;
+
+        setBotBubbleContent(bubble, merged.content);
+        refreshBotMessageChrome(messageId, merged);
+        messagesBox.scrollTop = messagesBox.scrollHeight;
+        showToast("Ответ продолжен");
+      } catch (error) {
+        delete messageRows[idx]._continuing;
+        setBotMessageFooterBusy(messageId, false);
+        if (error.name === "AbortError") {
+          showToast("Продолжение остановлено");
+          return;
+        }
         throw error;
       } finally {
         stopAiBusy();
@@ -1992,6 +2041,34 @@
       button.replaceChildren(svg);
     }
 
+    function appendMessageEditToolbar(stack, messageId) {
+      if (!stack) return;
+      stack.querySelector(".message-edit-toolbar")?.remove();
+
+      const toolbar = document.createElement("div");
+      toolbar.className = "message-edit-toolbar";
+
+      const saveBtn = document.createElement("button");
+      saveBtn.type = "button";
+      saveBtn.className = "message-edit-check";
+      saveBtn.title = "Сохранить";
+      saveBtn.setAttribute("aria-label", "Сохранить");
+      setJanitorEditIconButton(saveBtn, "check");
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "message-edit-abort";
+      cancelBtn.title = "Отмена";
+      cancelBtn.setAttribute("aria-label", "Отмена");
+      setJanitorEditIconButton(cancelBtn, "close");
+
+      saveBtn.addEventListener("click", () => commitMessageEdit(messageId));
+      cancelBtn.addEventListener("click", () => cancelMessageEdit(messageId));
+
+      toolbar.append(saveBtn, cancelBtn);
+      stack.appendChild(toolbar);
+    }
+
     function cancelMessageEdit(messageId) {
       if (editingMessageId !== messageId) return;
       editingMessageId = null;
@@ -1999,10 +2076,9 @@
       const row = findMessageRow(messageId);
       if (!row || !target) return;
       const stack = row.querySelector(".message-stack");
-      if (stack) stack.classList.remove("message-stack--editing");
-      const headerActions = row.querySelector(".message-card-header-actions");
-      if (headerActions) {
-        headerActions.innerHTML = buildMessageHeaderAreaHtml(target);
+      if (stack) {
+        stack.classList.remove("message-stack--editing");
+        stack.querySelector(".message-edit-toolbar")?.remove();
       }
       const bubble = row.querySelector(".message-bubble");
       if (bubble) bubble.classList.remove("message-bubble--editing");
@@ -2028,29 +2104,6 @@
       const stack = row.querySelector(".message-stack");
       if (stack) stack.classList.add("message-stack--editing");
 
-      const headerActions = row.querySelector(".message-card-header-actions");
-      if (headerActions) {
-        headerActions.replaceChildren();
-        const saveBtn = document.createElement("button");
-        saveBtn.type = "button";
-        saveBtn.className = "message-edit-check";
-        saveBtn.title = "Сохранить";
-        saveBtn.setAttribute("aria-label", "Сохранить");
-        setJanitorEditIconButton(saveBtn, "check");
-
-        const cancelBtn = document.createElement("button");
-        cancelBtn.type = "button";
-        cancelBtn.className = "message-edit-abort";
-        cancelBtn.title = "Отмена";
-        cancelBtn.setAttribute("aria-label", "Отмена");
-        setJanitorEditIconButton(cancelBtn, "close");
-
-        headerActions.append(saveBtn, cancelBtn);
-
-        saveBtn.addEventListener("click", () => commitMessageEdit(messageId));
-        cancelBtn.addEventListener("click", () => cancelMessageEdit(messageId));
-      }
-
       editingMessageId = messageId;
       const st = String(target.sender_type || "").trim().toLowerCase();
       const text =
@@ -2068,6 +2121,7 @@
       ta.value = text;
 
       bubble.appendChild(ta);
+      appendMessageEditToolbar(stack, messageId);
 
       ta.title = "Ctrl+Enter — сохранить, Esc — отмена";
 
@@ -2177,6 +2231,32 @@
 
     function buildMessageHeaderAreaHtml(message) {
       return `${buildMessageHeaderActions(message)}${buildMessageMoreMenu(message)}`;
+    }
+
+    function buildMessageUserDeleteBtn(message) {
+      if (!message?.id || isInitialBotGreetingMessage(message)) return "";
+      const id = message.id;
+      return `<button
+            type="button"
+            class="message-action-btn icon danger"
+            data-action="delete"
+            data-message-id="${id}"
+            title="Удалить"
+            aria-label="Удалить"
+          >🗑</button>`;
+    }
+
+    function buildMessageUserToolbarHtml(message, isLoadingUi) {
+      if (isLoadingUi || !message?.id) return "";
+      const headerActions = buildMessageHeaderActions(message);
+      const deleteBtn = buildMessageUserDeleteBtn(message);
+      if (!headerActions && !deleteBtn) return "";
+      return `
+        <div class="message-user-toolbar message-actions--toolbar">
+          ${headerActions}
+          ${deleteBtn}
+        </div>
+      `;
     }
 
     function closeAllMessageMoreMenus() {
@@ -2396,6 +2476,14 @@
               ? `<button
             type="button"
             class="message-action-btn icon"
+            data-action="continue"
+            data-message-id="${id}"
+            title="Продолжить генерацию в этом сообщении"
+            aria-label="Продолжить генерацию"
+          >⏵</button>
+          <button
+            type="button"
+            class="message-action-btn icon"
             data-action="regenerate"
             data-message-id="${id}"
             title="Перегенерировать ответ"
@@ -2433,10 +2521,11 @@
           ? activePersona?.name || savedUser.username || "Вы"
           : currentBot?.name || "Бот";
 
-      const bubbleText =
+      let bubbleText =
         type === "bot" && !isLoadingUi
           ? getDisplayedBotMessageContent(message)
           : normalizeChatMessageText(message.content);
+      const decryptUnavailable = Boolean(message._decryptFailed);
 
       const footerActionsHtml = !isLoadingUi ? buildMessageFooterActions(message) : "";
       const footerHtml =
@@ -2444,28 +2533,60 @@
           ? `<div class="message-bubble-footer">${footerActionsHtml}</div>`
           : "";
 
-      row.innerHTML = `
-        <img class="message-avatar" src="${escapeHtml(avatar)}" alt="" />
-        <div class="message-stack ${type === "user" ? "message-stack--user" : ""}">
-          <div class="message-top-row">
-            <span class="message-author">${escapeHtml(name)}</span>
-            <div class="message-card-header-actions">
-              ${!isLoadingUi ? buildMessageHeaderAreaHtml(message) : ""}
+      const headerHtml = !isLoadingUi ? buildMessageHeaderAreaHtml(message) : "";
+      const bubbleInner = isLoadingUi
+        ? buildTypingDotsHtml()
+        : type === "bot"
+          ? formatBotMessageHtml(bubbleText)
+          : escapeHtml(bubbleText);
+      const bubbleClass = `message-bubble ${isLoadingUi ? "loading" : ""}${decryptUnavailable ? " message-bubble--unavailable" : ""}`;
+      const bubbleAttrs =
+        type === "bot" && isFilterNotice ? ' role="status" aria-live="polite"' : "";
+
+      if (type === "user") {
+        const userToolbarHtml = buildMessageUserToolbarHtml(message, isLoadingUi);
+        const userMoreHtml = !isLoadingUi ? buildMessageMoreMenu(message) : "";
+        row.innerHTML = `
+          <div class="message-user-block">
+            <div class="message-user-column">
+              <div class="message-user-head">
+                <span class="message-author">${escapeHtml(name)}</span>
+                ${
+                  userMoreHtml
+                    ? `<div class="message-card-header-actions message-card-header-actions--head">${userMoreHtml}</div>`
+                    : ""
+                }
+              </div>
+              <div class="message-user-body">
+                <div class="message-content-col message-content-col--user">
+                  ${userToolbarHtml}
+                  <div class="message-stack message-stack--user">
+                    <div class="${bubbleClass}"${bubbleAttrs}>${bubbleInner}</div>
+                    ${isUserPolicyFlagged && !isLoadingUi ? `<p class="message-policy-hint" role="note">Реплика не проходит правила площадки (жестокость, 18+ или мат). Для модели в истории она учитывается как скрытая; ответ персонажа ограничен.</p>` : ""}
+                  </div>
+                </div>
+                <img class="message-avatar message-avatar--user-side avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
+              </div>
             </div>
           </div>
-          <div class="message-bubble ${isLoadingUi ? "loading" : ""}"${isFilterNotice ? ' role="status" aria-live="polite"' : ""}>
-            ${
-              isLoadingUi
-                ? buildTypingDotsHtml()
-                : type === "bot"
-                  ? formatBotMessageHtml(bubbleText)
-                  : escapeHtml(bubbleText)
-            }
+        `;
+      } else {
+        row.innerHTML = `
+          <img class="message-avatar avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
+          <div class="message-bot-block">
+            <div class="message-bot-meta message-top-row">
+              <span class="message-author">${escapeHtml(name)}</span>
+              <div class="message-card-header-actions">${headerHtml}</div>
+            </div>
+            <div class="message-content-col message-content-col--bot">
+              <div class="message-stack">
+                <div class="${bubbleClass}"${bubbleAttrs}>${bubbleInner}</div>
+              </div>
+              ${footerHtml}
+            </div>
           </div>
-          ${isUserPolicyFlagged && !isLoadingUi ? `<p class="message-policy-hint" role="note">Реплика не проходит правила площадки (жестокость, 18+ или мат). Для модели в истории она учитывается как скрытая; ответ персонажа ограничен.</p>` : ""}
-          ${footerHtml}
-        </div>
-      `;
+        `;
+      }
 
       messagesBox.appendChild(row);
       messagesBox.scrollTop = messagesBox.scrollHeight;
@@ -2753,6 +2874,27 @@
       }
     }
 
+    async function continueMessageOnServer(messageId, signal) {
+      validateLlmBeforeRequest();
+      const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/${messageId}/continue`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          persona_prompt: activePersona?.persona_prompt || activePersona?.description || "",
+          persona_name: activePersona?.name || "",
+          proxy: buildProxyPayloadForRequest(),
+          ...buildLlmRequestExtras(),
+        }),
+        signal,
+      });
+      const data = await safeReadJson(response);
+      if (!response.ok) throw new Error(data.message || "Ошибка продолжения");
+      return data;
+    }
+
     async function regenerateMessageOnServer(messageId, signal, { swipe = false } = {}) {
       validateLlmBeforeRequest();
       const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/${messageId}/regenerate`, {
@@ -2957,6 +3099,11 @@
           return;
         }
 
+        if (action === "continue") {
+          await runBotMessageContinue(messageId);
+          return;
+        }
+
         if (action === "regenerate") {
           await runBotMessageRegenerate(messageId, { swipe: false });
           return;
@@ -3120,12 +3267,6 @@
 
       const row = event.target.closest(".proxy-config-row[data-proxy-select]");
       if (!row) return;
-
-      if (row.dataset.proxySelect === "builtin") {
-        useBuiltinLlm();
-        showToast(`Встроенная модель: ${getBuiltinLlmLabel()}`);
-        return;
-      }
 
       const proxyId = row.dataset.proxyId;
       const target = proxyConfigs.find((item) => item.id === proxyId);

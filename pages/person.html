@@ -10,6 +10,7 @@
   <script src="/js/api-base.js"></script>
   <script src="/js/notifications.js" defer></script>
   <script src="/js/siteDialogs.js" defer></script>
+  <script src="/js/imageLightbox.js" defer></script>
 </head>
 <body>
   <header class="topbar">
@@ -85,7 +86,7 @@
           <div class="camera-icon">▣</div>
           <p>Перетащите изображение сюда или выберите его, щёлкнув по нему.</p>
         </div>
-        <img id="avatarPreview" src="" alt="avatar" />
+        <img id="avatarPreview" class="avatar-zoomable" src="" alt="avatar" />
       </label>
     </div>
 
@@ -256,7 +257,7 @@
           </div>
 
           <div class="persona-image">
-            <img src="${persona.avatar_url || "/img/icon.svg"}" alt="persona" />
+            <img class="avatar-zoomable" src="${persona.avatar_url || "/img/icon.svg"}" alt="persona" />
           </div>
 
           <div class="persona-info">

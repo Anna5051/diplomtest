@@ -7,6 +7,9 @@
     "start": "node config/server.js",
     "build": "node scripts/layero-build.js",
     "test:llm": "node scripts/test-llm.js",
+    "test:format": "node scripts/test-roleplay-format.js",
+    "test:llm:roleplay": "node scripts/test-llm-roleplay.js",
+    "restore:messages:railway": "node scripts/restore-messages-content.js",
     "deploy": "wrangler deploy",
     "preview": "wrangler dev"
   },

@@ -119,6 +119,7 @@ const {
   mapMessagesToOllamaHistory,
   generateBotReply,
   buildBotReplyFromHistory,
+  mergeMessageContinuation,
   classifyUserPolicyViolation,
   FILTERED_BOT_MESSAGE_PLACEHOLDER,
 } = require("./aiChat");
@@ -139,6 +140,7 @@ const {
   encryptMessageContentForDb,
   decryptMessageContentFromDb,
   decryptMessageRowsForApi,
+  logKeyConfiguration,
 } = require("./messageContentCrypto");
 let hasEmailConfirmedColumnCache = null;
 
@@ -629,6 +631,22 @@ function deleteBotByAdmin(botId, callback) {
       callback(null, result);
     },
   );
+}
+
+function isBotPrivateVisibility(visibility) {
+  return String(visibility || "").trim().toLowerCase() === "private";
+}
+
+function guardAdminBotAccess(botId, res, onAllowed) {
+  db.query("SELECT id, visibility FROM bots WHERE id = ? LIMIT 1", [botId], (err, rows) => {
+    if (err) {
+      return res.status(500).json({ message: "Ошибка проверки бота" });
+    }
+    if (!rows.length || isBotPrivateVisibility(rows[0].visibility)) {
+      return res.status(404).json({ message: "Бот не найден" });
+    }
+    onAllowed(rows[0]);
+  });
 }
 
 function deleteUserByAdmin(userId, callback) {
@@ -2493,17 +2511,6 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
     );
     const upperMessageId = previousRows.length ? Number(previousRows[0].id) : null;
 
-    const regenerated = await buildBotReplyFromHistory(
-      dbQuery,
-      chatId,
-      ownedChat,
-      String(persona_prompt || ""),
-      String(persona_name || ""),
-      upperMessageId,
-      { regenerate: true, swipe: Boolean(swipe) },
-      runtimeConfig,
-    );
-
     const plainOld = decryptMessageContentFromDb(targetRows[0].content);
     let oldMeta = null;
     if (
@@ -2518,6 +2525,26 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
         oldMeta = null;
       }
     }
+
+    let previousVariants = [String(plainOld)];
+    if (oldMeta && Array.isArray(oldMeta.v) && oldMeta.v.length) {
+      previousVariants = oldMeta.v.map((x) => String(x));
+    }
+
+    const regenerated = await buildBotReplyFromHistory(
+      dbQuery,
+      chatId,
+      ownedChat,
+      String(persona_prompt || ""),
+      String(persona_name || ""),
+      upperMessageId,
+      {
+        regenerate: true,
+        swipe: Boolean(swipe),
+        previousVariants,
+      },
+      runtimeConfig,
+    );
 
     const isSwipe = Boolean(swipe);
     let swipeVariantsList = null;
@@ -2583,6 +2610,109 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
     });
   } catch (error) {
     return respondWithLlmError(res, error, "Перегенерация: ");
+  }
+});
+
+app.post("/chat/:chatId/message/:messageId/continue", async (req, res) => {
+  const { chatId, messageId } = req.params;
+  const { user_id, persona_prompt, persona_name, proxy } = req.body;
+  const runtimeConfig = resolveRuntimeConfig(
+    proxy,
+    req.body?.llm_model,
+    req.body?.llm_settings,
+  );
+
+  if (!user_id) {
+    return res.status(400).json({ message: "Не указан пользователь" });
+  }
+  if (rejectIfBuiltinLlmNotReady(res, req.body?.proxy)) return;
+
+  try {
+    const ownedChat = await getOwnedChat(chatId, user_id);
+    if (!ownedChat) return res.status(404).json({ message: "Чат не найден" });
+    if (ownedChat === "forbidden") {
+      return res.status(403).json({ message: "Нет доступа к этому чату" });
+    }
+
+    const targetRows = await dbQuery(
+      `
+        SELECT id, sender_type, content
+        FROM messages
+        WHERE id = ? AND chat_id = ?
+        LIMIT 1
+      `,
+      [messageId, chatId],
+    );
+    if (!targetRows.length) {
+      return res.status(404).json({ message: "Сообщение не найдено" });
+    }
+    if (targetRows[0].sender_type !== "bot") {
+      return res.status(400).json({
+        message: "Продолжение доступно только для ответа бота",
+      });
+    }
+
+    const oldestBotId = await getOldestBotMessageIdInChat(chatId);
+    if (oldestBotId != null && Number(messageId) === oldestBotId) {
+      return res.status(400).json({
+        message: "Начальное сообщение бота нельзя продолжить",
+      });
+    }
+
+    const plainOld = decryptMessageContentFromDb(targetRows[0].content);
+    if (!String(plainOld || "").trim()) {
+      return res.status(400).json({ message: "Сообщение пустое" });
+    }
+
+    const previousRows = await dbQuery(
+      `
+        SELECT id
+        FROM messages
+        WHERE chat_id = ? AND id < ?
+        ORDER BY id DESC
+        LIMIT 1
+      `,
+      [chatId, messageId],
+    );
+    const upperMessageId = previousRows.length ? Number(previousRows[0].id) : null;
+
+    const continuation = await buildBotReplyFromHistory(
+      dbQuery,
+      chatId,
+      ownedChat,
+      String(persona_prompt || ""),
+      String(persona_name || ""),
+      upperMessageId,
+      { continuePartial: plainOld },
+      runtimeConfig,
+    );
+
+    const merged = mergeMessageContinuation(plainOld, continuation);
+    if (!String(merged || "").trim()) {
+      return res.status(500).json({ message: "Не удалось сгенерировать продолжение" });
+    }
+
+    await dbQuery(
+      `
+        UPDATE messages
+        SET content = ?, content_variants = NULL
+        WHERE id = ? AND chat_id = ?
+      `,
+      [encryptMessageContentForDb(merged), messageId, chatId],
+    );
+    await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+
+    return res.json({
+      message: "Ответ продолжен ✅",
+      reply: {
+        id: Number(messageId),
+        chat_id: Number(chatId),
+        sender_type: "bot",
+        content: merged,
+      },
+    });
+  } catch (error) {
+    return respondWithLlmError(res, error, "Продолжение: ");
   }
 });
 
@@ -2958,28 +3088,42 @@ app.put("/admin/users/:id", requireAdmin, (req, res) => {
   const { id } = req.params;
   const { role_id } = req.body;
 
-  const sql = `
-    UPDATE users
-    SET
-      role_id = ?
-    WHERE id = ?
-  `;
-
-  db.query(
-    sql,
-    [Number(role_id) || 1, id],
-    (err) => {
-      if (err) {
-        return res.status(500).json({
-          message: "Ошибка обновления пользователя",
-        });
-      }
-
-      res.json({
-        message: "Пользователь обновлён ✅",
+  db.query("SELECT role_id FROM users WHERE id = ? LIMIT 1", [id], (roleErr, roleRows) => {
+    if (roleErr) {
+      return res.status(500).json({ message: "Ошибка проверки пользователя" });
+    }
+    if (!roleRows.length) {
+      return res.status(404).json({ message: "Пользователь не найден" });
+    }
+    if (Number(roleRows[0].role_id) === 2) {
+      return res.status(400).json({
+        message: "Роль учётной записи администратора нельзя изменить",
       });
-    },
-  );
+    }
+
+    const sql = `
+      UPDATE users
+      SET
+        role_id = ?
+      WHERE id = ?
+    `;
+
+    db.query(
+      sql,
+      [Number(role_id) || 1, id],
+      (err) => {
+        if (err) {
+          return res.status(500).json({
+            message: "Ошибка обновления пользователя",
+          });
+        }
+
+        res.json({
+          message: "Пользователь обновлён ✅",
+        });
+      },
+    );
+  });
 });
 
 app.put("/admin/users/:id/block", requireAdmin, (req, res) => {
@@ -2991,6 +3135,19 @@ app.put("/admin/users/:id/block", requireAdmin, (req, res) => {
       message: "Нельзя изменить блокировку для самого себя",
     });
   }
+
+  db.query("SELECT role_id FROM users WHERE id = ? LIMIT 1", [id], (roleErr, roleRows) => {
+    if (roleErr) {
+      return res.status(500).json({ message: "Ошибка проверки пользователя" });
+    }
+    if (!roleRows.length) {
+      return res.status(404).json({ message: "Пользователь не найден" });
+    }
+    if (Number(roleRows[0].role_id) === 2) {
+      return res.status(400).json({
+        message: "Нельзя заблокировать учётную запись администратора",
+      });
+    }
 
   db.query(
     `
@@ -3013,6 +3170,7 @@ app.put("/admin/users/:id/block", requireAdmin, (req, res) => {
       });
     },
   );
+  });
 });
 
 /*Удаление пользователя*/
@@ -3025,6 +3183,19 @@ app.delete("/admin/users/:id", requireAdmin, (req, res) => {
     });
   }
 
+  db.query("SELECT role_id FROM users WHERE id = ? LIMIT 1", [id], (roleErr, roleRows) => {
+    if (roleErr) {
+      return res.status(500).json({ message: "Ошибка проверки пользователя" });
+    }
+    if (!roleRows.length) {
+      return res.status(404).json({ message: "Пользователь не найден" });
+    }
+    if (Number(roleRows[0].role_id) === 2) {
+      return res.status(400).json({
+        message: "Нельзя удалить учётную запись администратора",
+      });
+    }
+
   deleteUserByAdmin(id, (err) => {
     if (err) {
       return res.status(500).json({
@@ -3035,6 +3206,7 @@ app.delete("/admin/users/:id", requireAdmin, (req, res) => {
     res.json({
       message: "Пользователь удалён ✅",
     });
+  });
   });
 });
 
@@ -3053,6 +3225,7 @@ app.get("/admin/bots", requireAdmin, (req, res) => {
       u.username AS author_name
     FROM bots b
     LEFT JOIN users u ON b.creator_id = u.id
+    WHERE b.visibility = 'public'
     ORDER BY b.id DESC
   `;
 
@@ -3078,41 +3251,48 @@ app.put("/admin/bots/:id/block", requireAdmin, (req, res) => {
   const { id } = req.params;
   const shouldBlock = Number(req.body?.is_blocked) === 1 ? 1 : 0;
 
-  db.query(
-    `
-      UPDATE bots
-      SET
-        is_blocked = ?,
-        updated_at = NOW()
-      WHERE id = ?
-    `,
-    [shouldBlock, id],
-    (err) => {
-      if (err) {
-        return res.status(500).json({
-          message: "Ошибка изменения блокировки бота",
-        });
-      }
+  guardAdminBotAccess(id, res, () => {
+    db.query(
+      `
+        UPDATE bots
+        SET
+          is_blocked = ?,
+          updated_at = NOW()
+        WHERE id = ? AND visibility = 'public'
+      `,
+      [shouldBlock, id],
+      (err, result) => {
+        if (err) {
+          return res.status(500).json({
+            message: "Ошибка изменения блокировки бота",
+          });
+        }
+        if (!result?.affectedRows) {
+          return res.status(404).json({ message: "Бот не найден" });
+        }
 
-      res.json({
-        message: shouldBlock ? "Бот заблокирован ✅" : "Бот разблокирован ✅",
-      });
-    },
-  );
+        res.json({
+          message: shouldBlock ? "Бот заблокирован ✅" : "Бот разблокирован ✅",
+        });
+      },
+    );
+  });
 });
 
 /*Удаление бота админом*/
 app.delete("/admin/bots/:id", requireAdmin, (req, res) => {
   const { id } = req.params;
-  deleteBotByAdmin(id, (err) => {
-    if (err) {
-      return res.status(500).json({
-        message: "Ошибка удаления бота",
-      });
-    }
+  guardAdminBotAccess(id, res, () => {
+    deleteBotByAdmin(id, (err) => {
+      if (err) {
+        return res.status(500).json({
+          message: "Ошибка удаления бота",
+        });
+      }
 
-    res.json({
-      message: "Бот удалён ✅",
+      res.json({
+        message: "Бот удалён ✅",
+      });
     });
   });
 });
@@ -3746,6 +3926,7 @@ function startHttpServer(port) {
         console.error("БД: ошибка —", dbErr.message);
       } else {
         console.log("БД: подключение установлено");
+        logKeyConfiguration();
         void logLlmModeAtStartup();
         ensurePersonaRoleColumn();
         ensureUserBlockedColumn();

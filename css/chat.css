@@ -32,19 +32,32 @@ body {
   top: 0;
   z-index: 50;
 
-  height: 56px;
-
   display: grid;
-  grid-template-columns: 160px 1fr max-content !important;
-
+  grid-template-columns: 160px 1fr max-content;
+  grid-template-rows: auto auto;
   align-items: center;
+  gap: 6px 12px;
 
-  padding: 0 18px;
+  min-height: 56px;
+  height: auto;
+  padding: 10px 18px 8px;
 
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   background: rgba(7, 8, 27, 0.88);
 
   backdrop-filter: blur(12px);
+}
+
+.chat-topbar .brand-link {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+}
+
+.chat-topbar-right {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
 }
 
 body.chat-overlay-open .chat-topbar {
@@ -177,10 +190,14 @@ body.chat-overlay-open .modal {
 }
 
 .api-global-prompt {
-  margin: 12px 12px 0;
+  margin: 0 0 14px;
   border: 1px solid var(--charitor-border);
   border-radius: 10px;
   background: var(--charitor-bg-elevated);
+}
+
+.api-settings-panel .api-global-prompt {
+  margin: 0 0 14px;
 }
 
 .api-global-prompt summary {
@@ -431,9 +448,15 @@ body.chat-overlay-open .modal {
 }
 
 .chat-title {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  justify-self: center;
+  width: 100%;
   text-align: center;
-  font-size: 15px;
+  font-size: 17px;
   font-weight: 700;
+  padding: 2px 0 4px;
+  color: #f0ecff;
 }
 
 .lock-icon {
@@ -444,9 +467,11 @@ body.chat-overlay-open .modal {
 .chat-topbar-right {
   display: flex;
   justify-content: flex-end !important;
+  align-items: center;
   gap: 8px;
   flex-wrap: nowrap;
   width: max-content;
+  justify-self: end;
 }
 
 .proxy-settings-btn {
@@ -565,6 +590,9 @@ body.chat-overlay-open .modal {
 
 .chat-page {
   /* Узкая колонка по центру, как у Janitor (~800px контента + поля) */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   max-width: min(820px, calc(100vw - 32px));
 
   margin: 0 auto;
@@ -573,16 +601,19 @@ body.chat-overlay-open .modal {
 }
 
 .notice {
+  align-self: center;
   width: fit-content;
   max-width: 100%;
   margin: 0 auto 18px;
   padding: 8px 14px;
   font-size: 13px;
   line-height: 1.45;
+  text-align: center;
   border-radius: 999px;
   border: 1px solid rgba(170, 150, 255, 0.2);
   background: rgba(18, 17, 42, 0.6);
   color: #d7d1ee;
+  box-sizing: border-box;
 }
 
 
@@ -646,74 +677,171 @@ body.chat-overlay-open .modal {
 }
 
 .message-user {
-  flex-direction: row-reverse;
   justify-content: flex-end;
 }
 
-/* Колонка: пузырь по ширине текста, скругление в духе Character */
+.message-user-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: fit-content;
+  max-width: min(640px, 96%);
+  margin-left: auto;
+  min-width: 0;
+}
+
+.message-user-toolbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+
+.message-user-column {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.message-user-head {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.message-user-body {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+.message-avatar--user-side {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.message-user-head .message-author {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+}
+
+.message-card-header-actions--head {
+  display: flex;
+  align-items: center;
+}
+
+.message-card-header-actions--rail.message-actions--rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
+.message-content-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.message-content-col--user {
+  align-items: flex-end;
+  gap: 0;
+}
+
+.message-content-col--user .message-user-toolbar {
+  align-self: flex-start;
+  width: 100%;
+  margin: 0 0 6px;
+}
+
+.message-content-col--bot {
+  align-items: flex-start;
+}
+
+.message-bot-block {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  max-width: min(720px, 94%);
+}
+
+.message-bot-meta {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Пузырь по ширине текста (Character.ai) */
 .message-stack {
   flex: 0 1 auto;
   min-width: 0;
   width: fit-content;
   max-width: 100%;
   position: relative;
-  display: flex;
+  display: inline-flex;
   flex-direction: column;
-  align-items: stretch;
-  gap: 6px;
-  padding: 8px 12px 10px;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 14px;
   margin: 0;
   box-sizing: border-box;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background: rgba(22, 20, 40, 0.55);
   box-shadow: 0 4px 18px rgba(0, 0, 0, 0.28);
-  transition:
-    background 0.2s ease,
-    border-color 0.2s ease;
-}
-
-.message:hover .message-stack,
-.message:focus-within .message-stack {
-  background: rgba(32, 28, 52, 0.72);
-  border-color: rgba(255, 255, 255, 0.14);
 }
 
 .message-bot .message-stack {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  width: auto;
+  width: fit-content;
   max-width: min(720px, 94%);
-  min-width: 0;
 }
 
 .message-user .message-stack {
-  /* Ширина по тексту: без absolute-шапки, иначе пузырёк с width:100% раздувается и текст «уезжает» вниз */
-  display: inline-flex;
-  flex-direction: column;
-  align-items: stretch;
   width: fit-content;
-  max-width: min(560px, 92%);
-  min-width: 0;
-  position: relative;
-  padding: 8px 12px 10px;
-  box-sizing: border-box;
-}
-
-.message-user .message-top-row {
-  position: static;
-  gap: 4px;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-  flex-shrink: 0;
+  max-width: min(480px, 88vw);
+  align-items: flex-start;
+  padding: 10px 14px;
 }
 
 .message-user .message-author {
-  font-size: 13px;
-  font-weight: 700;
   margin: 0;
   padding: 0;
 }
@@ -730,6 +858,24 @@ body.chat-overlay-open .modal {
   align-self: flex-start;
   width: auto;
   max-width: 100%;
+}
+
+.message-actions--rail .message-action-btn {
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.88);
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  font-size: 18px;
+  border-radius: 0;
+}
+
+.message-actions--rail .message-action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border: none;
 }
 
 .message-user .message-card-header-actions .message-action-btn {
@@ -760,26 +906,76 @@ body.chat-overlay-open .modal {
   font-size: 17px;
 }
 
-.message-user:has(.message-bubble--editing) .message-stack {
-  display: flex;
+/* В режиме правки: колонка и stack на всю ширину блока (не fit-content) */
+.message-bot:has(.message-bubble--editing) .message-bot-block {
   align-items: stretch;
-  width: min(680px, 100%);
-  max-width: min(680px, 100%);
-  position: relative;
-  padding: 8px 10px 10px;
+  width: 100%;
+  max-width: min(720px, 94%);
 }
 
-.message-user:has(.message-bubble--editing) .message-top-row {
-  position: static;
-  top: auto;
-  right: auto;
-  left: auto;
-  max-width: 100%;
+.message-bot:has(.message-bubble--editing) .message-content-col {
+  width: 100%;
+  align-items: stretch;
   align-self: stretch;
 }
 
-.message-user:has(.message-bubble--editing) .message-actions.message-actions--footer {
+.message:has(.message-bubble--editing) .message-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  max-width: 100%;
+  min-width: min(480px, calc(100vw - 72px));
+  box-sizing: border-box;
+}
+
+.message-user:has(.message-bubble--editing) .message-user-block {
+  width: min(680px, 100%);
+  max-width: min(680px, 96%);
+  align-items: stretch;
+}
+
+.message-user:has(.message-bubble--editing) .message-user-column,
+.message-user:has(.message-bubble--editing) .message-user-body,
+.message-user:has(.message-bubble--editing) .message-content-col--user {
+  width: 100%;
+  align-items: stretch;
+}
+
+.message-user:has(.message-bubble--editing) .message-actions.message-actions--footer,
+.message-user:has(.message-bubble--editing) .message-user-toolbar {
   display: none;
+}
+
+.message-bot:has(.message-bubble--editing) .message-bot-meta .message-card-header-actions {
+  display: none;
+}
+
+.message-edit-toolbar {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 2px;
+  box-sizing: border-box;
+}
+
+.message-bot .message-edit-toolbar {
+  justify-content: flex-start;
+}
+
+.message-user .message-edit-toolbar {
+  justify-content: flex-end;
+}
+
+.message-edit-toolbar .message-edit-check,
+.message-edit-toolbar .message-edit-abort {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
 }
 
 .message-stack--editing {
@@ -810,16 +1006,10 @@ body.chat-overlay-open .modal {
   align-items: center;
   justify-content: space-between;
   gap: 4px;
-  /* 100% в колонке с fit-content раздувает ширину stack до строки сообщения; stretch даёт ширину stack после раскладки */
-  width: auto;
+  width: 100%;
   max-width: 100%;
   min-width: 0;
-  align-self: stretch;
   box-sizing: border-box;
-}
-
-.message-stack--user .message-top-row {
-  flex-direction: row-reverse;
 }
 
 .message-card-header-actions {
@@ -860,9 +1050,9 @@ body.chat-overlay-open .modal {
   background: transparent;
   border: none;
   font-size: 15px;
-  line-height: 1.65;
+  line-height: 1.55;
   max-width: 100%;
-  width: 100%;
+  width: auto;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -882,7 +1072,7 @@ body.chat-overlay-open .modal {
   unicode-bidi: plaintext;
   align-self: flex-start;
   width: auto;
-  max-width: 100%;
+  max-width: min(680px, 90vw);
   min-width: 0;
 }
 
@@ -897,13 +1087,11 @@ body.chat-overlay-open .modal {
 .message-user .message-bubble {
   padding: 0;
   margin: 0;
-  margin-inline: 0;
   line-height: 1.45;
   color: #e6e9ed;
-  text-align: start;
-  align-self: stretch;
+  text-align: right;
   width: auto;
-  max-width: 100%;
+  max-width: min(440px, 82vw);
   min-width: 0;
   direction: ltr;
   unicode-bidi: plaintext;
@@ -925,15 +1113,15 @@ body.chat-overlay-open .modal {
 
 .message-bot .message-bubble.message-bubble--editing,
 .message-user .message-bubble.message-bubble--editing {
-  padding: 8px 0 0;
+  padding: 0;
   box-sizing: border-box;
   width: 100%;
+  max-width: none;
+  align-self: stretch;
 }
 
 .message-user .message-bubble.message-bubble--editing {
   text-align: start;
-  align-self: stretch;
-  max-width: none;
 }
 
 .message-bubble em,
@@ -993,6 +1181,7 @@ body.chat-overlay-open .modal {
 .message-edit-field {
   display: block;
   width: 100%;
+  min-width: 100%;
   min-height: 220px;
   max-height: min(62vh, 580px);
   resize: vertical;
@@ -1100,11 +1289,25 @@ body.chat-overlay-open .modal {
 }
 
 .message-bubble-footer {
-  width: 100%;
-  margin-top: 2px;
+  width: auto;
+  margin: 0;
   padding: 0;
   border: none;
   box-sizing: border-box;
+  background: transparent;
+}
+
+.message-content-col--user .message-bubble-footer {
+  align-self: flex-end;
+}
+
+.message-content-col--bot .message-bubble-footer {
+  align-self: flex-start;
+}
+
+.message-bubble-footer--busy {
+  opacity: 0.45;
+  pointer-events: none;
 }
 
 .message-actions--footer {
@@ -1126,6 +1329,8 @@ body.chat-overlay-open .modal {
 
 .message-user .message-actions--footer {
   justify-content: flex-end;
+  align-self: flex-end;
+  width: fit-content;
 }
 
 .message-action-btn {
@@ -1174,13 +1379,16 @@ body.chat-overlay-open .modal {
   padding-bottom: 1px;
 }
 
-.message-action-btn[data-action="regenerate"] {
+.message-action-btn[data-action="regenerate"],
+.message-action-btn[data-action="continue"] {
   font-size: 14px;
   font-weight: 600;
 }
 
 /* Действия у сообщения в чате: без подложки-квадрата, крупнее, белые иконки */
-.message-card-header-actions .message-action-btn {
+.message-card-header-actions .message-action-btn,
+.message-actions--footer .message-action-btn,
+.message-actions--toolbar .message-action-btn {
   border: none;
   background: transparent;
   color: #ffffff;
@@ -1195,40 +1403,44 @@ body.chat-overlay-open .modal {
 }
 
 .message-actions--footer .message-action-btn {
-  border: none;
-  background: transparent;
-  color: #ffffff;
-  border-radius: 0;
-  width: auto;
-  height: auto;
   min-width: 22px;
   min-height: 22px;
   padding: 0 3px;
   font-size: 16px;
-  font-weight: 500;
+}
+
+.message-actions--toolbar .message-action-btn {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 2px 4px;
+  font-size: 17px;
 }
 
 .message-card-header-actions .message-action-btn:hover,
-.message-actions--footer .message-action-btn:hover {
+.message-actions--footer .message-action-btn:hover,
+.message-actions--toolbar .message-action-btn:hover {
   background: rgba(255, 255, 255, 0.08);
   border: none;
   color: #ffffff;
 }
 
 .message-card-header-actions .message-action-btn:active,
-.message-actions--footer .message-action-btn:active {
+.message-actions--footer .message-action-btn:active,
+.message-actions--toolbar .message-action-btn:active {
   transform: scale(0.94);
 }
 
 .message-card-header-actions .message-action-btn.danger,
-.message-actions--footer .message-action-btn.danger {
+.message-actions--footer .message-action-btn.danger,
+.message-actions--toolbar .message-action-btn.danger {
   border: none;
   background: transparent;
   color: #ffffff;
 }
 
 .message-card-header-actions .message-action-btn.danger:hover,
-.message-actions--footer .message-action-btn.danger:hover {
+.message-actions--footer .message-action-btn.danger:hover,
+.message-actions--toolbar .message-action-btn.danger:hover {
   background: rgba(255, 255, 255, 0.1);
   border: none;
   color: #ffffff;
@@ -2217,47 +2429,39 @@ body.chat-overlay-open .modal {
   }
 
   .message-user {
-    flex-direction: row-reverse;
     justify-content: flex-end;
-    align-items: flex-start;
-    align-self: stretch;
-    width: 100%;
-    gap: 8px;
-    padding-right: 0;
   }
 
-  .message-user .message-avatar {
+  .message-user-block {
+    max-width: min(96vw, 560px);
+  }
+
+  .message-user-toolbar {
+    gap: 10px;
+    margin: 0 0 5px;
+  }
+
+  .message-avatar--user-side {
     width: 32px;
     height: 32px;
     border-radius: 8px;
-    flex-shrink: 0;
+  }
+
+  .message-bot-block {
+    max-width: min(92vw, 560px);
   }
 
   .message-bot .message-stack {
-    max-width: min(88vw, 560px);
+    max-width: min(92vw, 560px);
   }
 
   .message-user .message-stack {
-    max-width: min(88vw, 520px);
-    width: fit-content;
-    margin-left: auto;
-    margin-right: 0;
-    align-items: stretch;
-  }
-
-  .message-bubble {
-    width: auto;
-    max-width: 100%;
+    max-width: min(88vw, 480px);
+    padding: 9px 12px;
   }
 
   .message-user .message-bubble {
-    align-self: flex-start;
-    width: auto;
-    text-align: start;
-  }
-
-  .message-user .message-top-row {
-    justify-content: space-between;
+    max-width: min(80vw, 420px);
   }
 
   .notice {

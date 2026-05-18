@@ -1,5 +1,5 @@
 /**
- * Форматирование ролевых ответов в духе Janitor: мало абзацев, «» только у прямой речи.
+ * Форматирование ролевых ответов: мало абзацев; прямая речь в "лапках" (после постобработки).
  */
 (function roleplayParagraphsModule(root, factory) {
   const api = factory();
@@ -12,8 +12,16 @@
 })(typeof globalThis !== "undefined" ? globalThis : this, function factory() {
   function stripBrokenLead(text) {
     return String(text || "")
-      .replace(/^[.\s,;]+(?=[А-ЯЁA-Z«*"*])/u, "")
+      .replace(/^[.\s,;]+(?=[А-ЯЁA-Z«"*"*])/u, "")
       .trim();
+  }
+
+  /** «ёлочки» и типографские кавычки → ASCII " для отображения. */
+  function toAsciiDialogueQuotes(text) {
+    return String(text || "")
+      .replace(/[«»„“”]/g, '"')
+      .replace(/"{3,}/g, '"')
+      .replace(/([^\\])"{2}/g, '$1"');
   }
 
   function quoteSpeech(speech) {
@@ -154,20 +162,59 @@
     return /^(?:Она|Он|Каэлит)\s+/u.test(t);
   }
 
-  /** Реплика: начинается с обращения/1-го лица, не с «Прощение» / «Теперь». */
+  const USER_BODY =
+    "(?:подбородок|лоб|нос|рот|глаз|пальц|щек|спин|рук|губ|лиц|тело|плеч|волос|ше[йя]|бедр|колен|живот|бровь)";
+
+  /** Реплика: обращение/вопрос, не описание тела пользователя. */
   function isStrictDialogueSentence(sentence) {
     const t = stripBrokenLead(sentence);
     if (!t || t.length < 5) return false;
-    if (/^[«*]/.test(t) || isNarrationOnly(t)) return false;
+    if (/^[«*"*]/.test(t) || isNarrationOnly(t)) return false;
 
     if (/^(?:Прощение|Теперь|Потом|Затем|После|Вдруг|Она|Он|Каэлит)\s+/iu.test(t)) {
       return false;
     }
 
+    if (
+      new RegExp(`^(?:тво[йяёи]|твои|тебя|тебе)\\s+${USER_BODY}`, "iu").test(t) ||
+      /^(?:твоя|твой)\s+подбородок/iu.test(t) ||
+      /^за\s+твоей\s+спиной/iu.test(t)
+    ) {
+      return false;
+    }
+
     return new RegExp(
-      `^(?:ты|тебе|твой|твоя|твоё|я|мне|мой|моя|моё|мои|расскажи|скажи|нет|да|отпустить|прости|понять|какая|что\\s+ещё|а\\s+я)${WORD_END}`,
+      `^(?:ты|тебе|расскажи|скажи|нет|да|отпустить|прости|понять|какая|что\\s+ещё|а\\s+я|я|мне|мой|моя|моё|мои)${WORD_END}`,
       "iu",
     ).test(t);
+  }
+
+  function isQuotedUserNarrationInner(inner) {
+    const clean = stripBrokenLead(String(inner || ""));
+    if (!clean || clean.length < 8) return false;
+    if (new RegExp(`(?:тво[йяёи]|твои|тебя|тебе)\\s+${USER_BODY}`, "iu").test(clean)) {
+      return true;
+    }
+    if (/^(?:тво[йяёи]|твои)\s+/iu.test(clean) && !/[?!]$/.test(clean.trim())) {
+      return true;
+    }
+    if (/(?:сдвинул|дернул|приподнял|коснул)(?:ся|ась|ось|ись)?/iu.test(clean) && /тво/i.test(clean)) {
+      return true;
+    }
+    return false;
+  }
+
+  function repairMisquotedSegments(text) {
+    return String(text || "").replace(/"([^"\n]{6,})"/g, (full, inner) => {
+      if (isQuotedUserNarrationInner(inner)) {
+        return stripBrokenLead(inner) || full;
+      }
+      const wrapped = `"${inner}"`;
+      if (isQuotedNarration(wrapped)) {
+        return stripBrokenLead(unwrapQuotes(wrapped) || inner) || full;
+      }
+      return full;
+    });
   }
 
   function convertInlineEmDashes(paragraph) {
@@ -461,11 +508,16 @@
       .map(sanitizeRoleplayParagraph)
       .filter(Boolean);
 
-    return stripBrokenLead(mergeJanitorParagraphs(blocks).join("\n\n"));
+    const merged = toAsciiDialogueQuotes(
+      stripBrokenLead(mergeJanitorParagraphs(blocks).join("\n\n")),
+    );
+    return repairMisquotedSegments(merged);
   }
 
   return {
     structureRoleplayParagraphs,
+    repairMisquotedSegments,
+    toAsciiDialogueQuotes,
     convertParagraphDashesToQuotes,
     isUserMetaParagraph,
     sanitizeRoleplayParagraph,

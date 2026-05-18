@@ -250,6 +250,7 @@
         items.forEach((user) => {
           const card = document.createElement("article");
           card.className = "admin-card";
+          const isAdminAccount = Number(user.role_id) === 2;
           const avatarSrc =
             String(user.avatar_url || "").trim() || "/img/icon.svg";
 
@@ -277,113 +278,126 @@
                 <input type="text" class="edit-email" value="${escapeHtml(user.email)}" readonly disabled>
               </label>
 
-              <label>
+              ${
+                isAdminAccount
+                  ? `<label>
+                <span>Role</span>
+                <input type="text" value="admin" readonly disabled>
+              </label>`
+                  : `<label>
                 <span>Role</span>
                 <select class="edit-role-id">
                   <option value="1" ${Number(user.role_id) === 1 ? "selected" : ""}>user</option>
                   <option value="2" ${Number(user.role_id) === 2 ? "selected" : ""}>admin</option>
                 </select>
-              </label>
+              </label>`
+              }
             </div>
 
-            <div class="admin-actions">
+            ${
+              isAdminAccount
+                ? ""
+                : `<div class="admin-actions">
               <button class="action-btn primary save-user-btn">Сохранить роль</button>
               <button class="action-btn ${Number(user.is_blocked) === 1 ? "warning" : "secondary"} toggle-block-user-btn">
                 ${Number(user.is_blocked) === 1 ? "Разблокировать" : "Заблокировать"}
               </button>
               <button class="action-btn danger delete-user-btn">Удалить</button>
-            </div>
+            </div>`
+            }
           </div>
         `;
 
-          card
-            .querySelector(".save-user-btn")
-            .addEventListener("click", async () => {
-              const role_id = Number(card.querySelector(".edit-role-id").value);
+          if (!isAdminAccount) {
+            card
+              .querySelector(".save-user-btn")
+              .addEventListener("click", async () => {
+                const role_id = Number(card.querySelector(".edit-role-id").value);
 
-              try {
-                const res = await fetch(
-                  `${API_BASE}/admin/users/${user.id}`,
+                try {
+                  const res = await fetch(
+                    `${API_BASE}/admin/users/${user.id}`,
+                    {
+                      method: "PUT",
+                      headers: authHeaders(),
+                      body: JSON.stringify({ role_id }),
+                    },
+                  );
+
+                  const data = await res.json();
+                  notifyUser(data.message || "Готово", res.ok ? "success" : "error");
+                  if (res.ok) loadUsers();
+                } catch (error) {
+                  notifyUser("Ошибка сохранения пользователя", "error");
+                }
+              });
+
+            card
+              .querySelector(".toggle-block-user-btn")
+              .addEventListener("click", async () => {
+                const isBlocked = Number(user.is_blocked) === 1;
+                const shouldProceed = await siteConfirm(
+                  isBlocked
+                    ? `Разблокировать пользователя ${user.username}?`
+                    : `Заблокировать пользователя ${user.username}?`,
                   {
-                    method: "PUT",
-                    headers: authHeaders(),
-                    body: JSON.stringify({ role_id }),
+                    title: "Подтверждение",
+                    confirmText: isBlocked ? "Разблокировать" : "Заблокировать",
+                    cancelText: "Отмена",
+                    danger: !isBlocked,
                   },
                 );
+                if (!shouldProceed) return;
 
-                const data = await res.json();
-                notifyUser(data.message || "Готово", res.ok ? "success" : "error");
-                if (res.ok) loadUsers();
-              } catch (error) {
-                notifyUser("Ошибка сохранения пользователя", "error");
-              }
-            });
+                try {
+                  const res = await fetch(
+                    `${API_BASE}/admin/users/${user.id}/block`,
+                    {
+                      method: "PUT",
+                      headers: authHeaders(),
+                      body: JSON.stringify({ is_blocked: isBlocked ? 0 : 1 }),
+                    },
+                  );
 
-          card
-            .querySelector(".toggle-block-user-btn")
-            .addEventListener("click", async () => {
-              const isBlocked = Number(user.is_blocked) === 1;
-              const shouldProceed = await siteConfirm(
-                isBlocked
-                  ? `Разблокировать пользователя ${user.username}?`
-                  : `Заблокировать пользователя ${user.username}?`,
-                {
-                  title: "Подтверждение",
-                  confirmText: isBlocked ? "Разблокировать" : "Заблокировать",
-                  cancelText: "Отмена",
-                  danger: !isBlocked,
-                },
-              );
-              if (!shouldProceed) return;
+                  const data = await res.json();
+                  notifyUser(data.message || "Готово", res.ok ? "success" : "error");
+                  if (res.ok) loadUsers();
+                } catch (error) {
+                  notifyUser("Ошибка изменения блокировки", "error");
+                }
+              });
 
-              try {
-                const res = await fetch(
-                  `${API_BASE}/admin/users/${user.id}/block`,
+            card
+              .querySelector(".delete-user-btn")
+              .addEventListener("click", async () => {
+                const shouldDeleteUser = await siteConfirm(
+                  `Удалить пользователя ${user.username}?`,
                   {
-                    method: "PUT",
-                    headers: authHeaders(),
-                    body: JSON.stringify({ is_blocked: isBlocked ? 0 : 1 }),
+                    title: "Подтверждение удаления",
+                    confirmText: "Удалить",
+                    cancelText: "Отмена",
+                    danger: true,
                   },
                 );
+                if (!shouldDeleteUser) return;
 
-                const data = await res.json();
-                notifyUser(data.message || "Готово", res.ok ? "success" : "error");
-                if (res.ok) loadUsers();
-              } catch (error) {
-                notifyUser("Ошибка изменения блокировки", "error");
-              }
-            });
+                try {
+                  const res = await fetch(
+                    `${API_BASE}/admin/users/${user.id}`,
+                    {
+                      method: "DELETE",
+                      headers: authHeaders(),
+                    },
+                  );
 
-          card
-            .querySelector(".delete-user-btn")
-            .addEventListener("click", async () => {
-              const shouldDeleteUser = await siteConfirm(
-                `Удалить пользователя ${user.username}?`,
-                {
-                  title: "Подтверждение удаления",
-                  confirmText: "Удалить",
-                  cancelText: "Отмена",
-                  danger: true,
-                },
-              );
-              if (!shouldDeleteUser) return;
-
-              try {
-                const res = await fetch(
-                  `${API_BASE}/admin/users/${user.id}`,
-                  {
-                    method: "DELETE",
-                    headers: authHeaders(),
-                  },
-                );
-
-                const data = await res.json();
-                notifyUser(data.message || "Готово", res.ok ? "success" : "error");
-                if (res.ok) loadUsers();
-              } catch (error) {
-                notifyUser("Ошибка удаления пользователя", "error");
-              }
-            });
+                  const data = await res.json();
+                  notifyUser(data.message || "Готово", res.ok ? "success" : "error");
+                  if (res.ok) loadUsers();
+                } catch (error) {
+                  notifyUser("Ошибка удаления пользователя", "error");
+                }
+              });
+          }
 
           usersList.appendChild(card);
         });
@@ -402,6 +416,11 @@
         items.forEach((bot) => {
           const card = document.createElement("article");
           card.className = "bot-card-admin";
+          const authorName = bot.author_name || "Неизвестно";
+          const authorIdPart = bot.creator_id
+            ? `authorId=${encodeURIComponent(bot.creator_id)}&`
+            : "";
+          const authorProfileUrl = `/pages/profile.html?${authorIdPart}username=${encodeURIComponent(authorName)}`;
 
           card.innerHTML = `
           <div class="bot-image-admin">
@@ -418,7 +437,7 @@
                     ${escapeHtml(bot.name || "Без имени")}
                   </a>
                 </h3>
-                <p>Автор: ${escapeHtml(bot.author_name || "Неизвестно")}</p>
+                <p>Автор: <a href="${authorProfileUrl}" class="admin-inline-link">${escapeHtml(authorName)}</a></p>
               </div>
               <span class="bot-badge-admin">${escapeHtml(bot.visibility || "public")}</span>
             </div>

@@ -664,3 +664,59 @@ body.page-transition.page-leaving {
   opacity: 0.55;
   user-select: none;
 }
+
+/* Просмотр аватара бота / персоны по клику */
+.image-lightbox-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 6, 18, 0.88);
+  opacity: 0;
+  transition: opacity 0.16s ease;
+  box-sizing: border-box;
+}
+
+.image-lightbox-overlay.open {
+  opacity: 1;
+}
+
+.image-lightbox-img {
+  max-width: min(92vw, 720px);
+  max-height: min(88vh, 920px);
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+
+.image-lightbox-close {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  width: 40px;
+  height: 40px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  background: rgba(30, 28, 52, 0.9);
+  color: #fff;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.image-lightbox-close:hover {
+  background: rgba(60, 52, 100, 0.95);
+}
+
+img.avatar-zoomable {
+  cursor: zoom-in;
+}
+
+body.image-lightbox-open {
+  overflow: hidden;
+}
