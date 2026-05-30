@@ -181,60 +181,18 @@ nav {
 
 .footer-content {
   display: flex;
-  justify-content: space-between;
-  gap: 30px;
-  align-items: flex-start;
-}
-
-.footer-brand-block {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.footer-brand {
-  color: #fff;
-  text-decoration: none;
-  font-size: 38px;
-  font-weight: 700;
-}
-
-.footer-socials {
-  display: flex;
-  gap: 8px;
-}
-
-.footer-social {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
   justify-content: center;
-  text-decoration: none;
-  color: #fff;
-  font-size: 18px;
-  border: 1px solid rgba(181, 210, 255, 0.45);
-  background: linear-gradient(135deg, #2a7adf, #2cb6d5);
-}
-
-.footer-social img {
-  display: block;
-  width: 18px;
-  height: 18px;
-}
-
-.footer-social--telegram {
-  background: linear-gradient(135deg, #2aabee, #229ed9);
+  align-items: center;
 }
 
 .landing-footer-nav {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: center;
   align-items: center;
   gap: 8px 18px;
-  max-width: 720px;
+  max-width: 900px;
+  text-align: center;
 }
 
 .landing-footer-nav a {
@@ -432,15 +390,12 @@ nav {
 
   .footer-content {
     flex-direction: column;
+    align-items: center;
   }
 
   .landing-footer-nav {
     justify-content: center;
     max-width: none;
     text-align: center;
-  }
-
-  .footer-brand {
-    font-size: 30px;
   }
 }
