@@ -7,10 +7,16 @@ const {
   validateRoleplayFormatting,
   hasFirstPersonOutsideSpeech,
   hasUserAgencyViolation,
+  hasAttributedUserSpeech,
+  buildNeverSpeakForUserRules,
   isNearDuplicateOfHistory,
   isNearDuplicateOfVariants,
 } = require("../config/roleplayFormatRules");
-const { finalizeBotReplyText, buildHardSafeFallbackReply } = require("../config/aiChat");
+const {
+  finalizeBotReplyText,
+  buildHardSafeFallbackReply,
+  buildSystemPrompt,
+} = require("../config/aiChat");
 
 const samples = [
   {
@@ -29,6 +35,11 @@ const samples = [
     name: "действие в звёздочках",
     in: '*она наклонилась ближе*\n\n"Ты правда так думаешь?" — прошептала она.',
     mustHave: /\*она наклонилась/,
+  },
+  {
+    name: "начальное сообщение с диалогом к {{user}}",
+    in: "Она резко повернулась, но замерла, узнав тебя.\n\n— {{user}}? — её голос прозвучал тихо. — Что ты здесь делаешь? Скажи мне, что ты пришёл не за тем, чтобы напомнить мне о моих обязанностях.",
+    mustHave: /\{\{user\}\}/,
   },
 ];
 
@@ -107,6 +118,67 @@ if (hasUserAgencyViolation('"Твоя подбородок дрогнул."', ""
 } else {
   failed += 1;
   console.log("FAIL", "не ловит описание пользователя в кавычках");
+}
+
+const userSpeech =
+  '*Она смотрит на него.*\n\n"Хорошо, я согласна." — сказала Байхэ.\n\n*Он кивает.*';
+if (hasUserAgencyViolation(userSpeech, "Байхэ")) {
+  console.log("OK", "ловит реплику игрока, приписанную персоне");
+} else {
+  failed += 1;
+  console.log("FAIL", "не ловит реплику игрока, приписанную персоне");
+}
+
+if (hasUserAgencyViolation("*Байхэ подошла к окну.*", "Байхэ")) {
+  console.log("OK", "ловит действие игрока в звёздочках");
+} else {
+  failed += 1;
+  console.log("FAIL", "не ловит действие игрока в звёздочках");
+}
+
+if (hasUserAgencyViolation("Ты повернулась к нему и улыбнулась.", "")) {
+  console.log("OK", "ловит «ты + действие»");
+} else {
+  failed += 1;
+  console.log("FAIL", "не ловит «ты + действие»");
+}
+
+const screenshotLike =
+  '*Байхэ останавливается рядом с Аурелией, их позы совпали.*\n\n"Ты знаешь, мне всегда было интересно. Странно, что такая тихая дама может быть такой упрямой?"\n\n*Голос Байхэ звучит мягче, почти дружелюбно.*\n\n"А как ты справишься со своим следующим обязательством?"';
+if (hasUserAgencyViolation(screenshotLike, "Байхэ")) {
+  console.log("OK", "ловит типичный ответ «бот пишет за Байхэ»");
+} else {
+  failed += 1;
+  console.log("FAIL", "не ловит типичный ответ «бот пишет за Байхэ»");
+}
+
+const botReactionOnly =
+  '*Аурелия слегка приподнимает бровь, не отводя взгляда.*\n\n"Ты всегда так прямолинейна, Байхэ?" — её голос звучит ровно, но в нём слышится лёгкое любопытство.';
+if (hasUserAgencyViolation(botReactionOnly, "Байхэ")) {
+  failed += 1;
+  console.log("FAIL", "не должен ругаться на обращение бота к игроку");
+} else {
+  console.log("OK", "обращение бота к игроку допустимо");
+}
+
+const systemPrompt = buildSystemPrompt("", "", "Аурелия", "Байхэ");
+if (
+  systemPrompt.includes("НЕ ПИСАТЬ ЗА ИГРОКА") &&
+  systemPrompt.includes("Байхэ") &&
+  systemPrompt.includes("{{user}}")
+) {
+  console.log("OK", "system prompt содержит правило {{user}}");
+} else {
+  failed += 1;
+  console.log("FAIL", "system prompt без правила {{user}}");
+}
+
+const neverRules = buildNeverSpeakForUserRules("Байхэ");
+if (neverRules.includes("Байхэ сказала")) {
+  console.log("OK", "правило {{user}} персонализировано");
+} else {
+  failed += 1;
+  console.log("FAIL", "правило {{user}} не персонализировано");
 }
 
 const fallbackA = finalizeBotReplyText(buildHardSafeFallbackReply("Каэлит", [], 0));

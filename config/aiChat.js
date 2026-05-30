@@ -6,9 +6,21 @@ const {
   decryptMessageContentFromDb,
 } = require("./messageContentCrypto");
 const { structureRoleplayParagraphs } = require("../js/roleplayParagraphs");
+const { substituteChatTokens } = require("../js/chatTokens");
+const {
+  mergeContinuationText,
+} = require("../js/mergeContinuation");
+const {
+  prepareHistoryForLlm,
+  formatUserDirectivesForSystemPrompt,
+} = require("../js/userMessageDirectives");
 const {
   ROLEPLAY_FORMAT_RULES_RU,
   ROLEPLAY_FORMAT_REWRITE_HINT,
+  buildNeverSpeakForUserRules,
+  buildPreGenerationUserAgencyReminder,
+  buildPreGenerationUserAgencyUserMessage,
+  wouldViolateUserAgency,
   validateRoleplayFormatting,
   hasFirstPersonOutsideSpeech,
   hasUserAgencyViolation,
@@ -38,24 +50,181 @@ function policyWordSurroundedPattern(coreSource) {
   return new RegExp(`(?<![0-9A-Za-zА-Яа-яЁё])(?:${coreSource})(?![0-9A-Za-zА-Яа-яЁё])`, "iu");
 }
 
-function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
+function stripHtmlToPlainText(html) {
+  return String(html || "")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/\u00a0/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function isPlaceholderCharacterText(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return !normalized || normalized === "нет данных" || normalized === "нет меток";
+}
+
+function pickCharacterText(...values) {
+  for (const value of values) {
+    const text =
+      typeof value === "string" ? value.trim() : stripHtmlToPlainText(value);
+    if (!isPlaceholderCharacterText(text)) return text;
+  }
+  return "";
+}
+
+function buildBotProfileFromChat(chat) {
+  if (!chat || typeof chat !== "object") return {};
+  return {
+    full_description:
+      chat.bot_full_description ?? chat.full_description ?? "",
+    short_description:
+      chat.bot_short_description ?? chat.short_description ?? "",
+    tags: chat.bot_tags ?? chat.tags ?? "",
+    greeting_message:
+      chat.bot_greeting_message ?? chat.greeting_message ?? "",
+  };
+}
+
+function resolveCharacterDefinition(botSystemPrompt, botProfile = {}) {
   const rawSystemPrompt = String(botSystemPrompt || "");
   const promptMetadata = extractPromptMetadata(rawSystemPrompt);
-  const scenario = getPromptSection(rawSystemPrompt, "Сценарий:");
-  const roleplayRules =
-    promptMetadata?.roleplayRules ||
-    getPromptSection(rawSystemPrompt, "Правила отыгрыша роли:");
-  const memoryFacts =
-    promptMetadata?.memoryFacts ||
-    getPromptSection(rawSystemPrompt, "Ключевые факты для памяти:");
-  const characterRules =
-    promptMetadata?.characterRules ||
-    getPromptSection(rawSystemPrompt, "Ограничения и предупреждения:");
+  const profile = botProfile && typeof botProfile === "object" ? botProfile : {};
+
+  return {
+    biography: pickCharacterText(
+      stripHtmlToPlainText(profile.full_description),
+      getPromptSection(rawSystemPrompt, "Биография персонажа:"),
+    ),
+    shortDescription: pickCharacterText(profile.short_description),
+    scenario: pickCharacterText(
+      promptMetadata?.scenario,
+      getPromptSection(rawSystemPrompt, "Сценарий:"),
+    ),
+    personality: pickCharacterText(
+      promptMetadata?.roleplayRules,
+      getPromptSection(rawSystemPrompt, "Правила отыгрыша роли:"),
+    ),
+    memoryFacts: pickCharacterText(
+      promptMetadata?.memoryFacts,
+      getPromptSection(rawSystemPrompt, "Ключевые факты для памяти:"),
+    ),
+    characterRules: pickCharacterText(
+      promptMetadata?.characterRules,
+      getPromptSection(rawSystemPrompt, "Ограничения и предупреждения:"),
+    ),
+    characterType: pickCharacterText(
+      promptMetadata?.characterType,
+      getPromptSection(rawSystemPrompt, "Тип персонажа:"),
+    ),
+    exampleDialogues: pickCharacterText(
+      promptMetadata?.exampleDialogues,
+      getPromptSection(rawSystemPrompt, "Примеры диалогов:"),
+    ),
+    tags: pickCharacterText(
+      profile.tags,
+      promptMetadata?.tags,
+      getPromptSection(rawSystemPrompt, "Метки:"),
+    ),
+    greetingMessage: pickCharacterText(profile.greeting_message),
+  };
+}
+
+const CHARACTER_TYPE_LABELS = {
+  female: "женский",
+  male: "мужской",
+  nonhuman: "нелюдь / монстр",
+  custom: "кастомный",
+  any: "универсальный",
+};
+
+function buildSystemPrompt(
+  botSystemPrompt,
+  personaPrompt,
+  botName,
+  personaName,
+  botProfile = {},
+) {
+  const rawSystemPrompt = String(botSystemPrompt || "");
+  const tokenContext = {
+    personaName: String(personaName || "").trim(),
+    charName: String(botName || "").trim(),
+  };
+  const def = resolveCharacterDefinition(botSystemPrompt, botProfile);
+  const applyTokens = (text) =>
+    substituteChatTokens(String(text || "").trim(), tokenContext);
 
   const parts = [];
   parts.push(
-    `Ты — персонаж "${botName || "бот"}". Всегда отвечай от лица этого персонажа.`,
+    `Ты — персонаж "${botName || "бот"}". Всегда отвечай от лица этого персонажа, строго следуя его биографии, личности и настройкам ниже.`,
   );
+
+  const characterBlocks = [];
+  if (def.biography) {
+    characterBlocks.push(
+      `Биография и описание персонажа (главный источник личности — соблюдай неукоснительно):\n${applyTokens(def.biography)}`,
+    );
+  }
+  if (def.shortDescription) {
+    characterBlocks.push(
+      `Краткое описание:\n${applyTokens(def.shortDescription)}`,
+    );
+  }
+  if (def.scenario) {
+    characterBlocks.push(`Сценарий и обстановка:\n${applyTokens(def.scenario)}`);
+  }
+  if (def.personality) {
+    characterBlocks.push(
+      `Личность и стиль общения:\n${applyTokens(def.personality)}`,
+    );
+  }
+  if (def.memoryFacts) {
+    characterBlocks.push(`Лор и ключевые факты:\n${applyTokens(def.memoryFacts)}`);
+  }
+  if (def.characterRules) {
+    characterBlocks.push(
+      `Правила и ограничения персонажа:\n${applyTokens(def.characterRules)}`,
+    );
+  }
+  if (def.characterType && def.characterType !== "any") {
+    const typeLabel =
+      CHARACTER_TYPE_LABELS[def.characterType] || def.characterType;
+    characterBlocks.push(`Тип персонажа: ${typeLabel}`);
+  }
+  if (def.exampleDialogues) {
+    characterBlocks.push(
+      `Примеры реплик (ориентир стиля):\n${applyTokens(def.exampleDialogues)}`,
+    );
+  }
+  if (def.tags) {
+    characterBlocks.push(`Метки и темы: ${applyTokens(def.tags)}`);
+  }
+  if (def.greetingMessage) {
+    characterBlocks.push(
+      `Начальное сообщение персонажа (ориентир тона и первой сцены):\n${applyTokens(def.greetingMessage)}`,
+    );
+  }
+
+  if (characterBlocks.length) {
+    parts.push(
+      [
+        "=== ОПРЕДЕЛЕНИЕ ПЕРСОНАЖА ===",
+        "Перед каждым ответом сверяйся с этими данными: характер, мотивации, речь и границы персонажа должны им соответствовать.",
+        ...characterBlocks,
+      ].join("\n\n"),
+    );
+  } else if (rawSystemPrompt.trim()) {
+    parts.push(
+      `Настройки персонажа:\n${applyTokens(rawSystemPrompt.trim().slice(0, 4000))}`,
+    );
+  }
+
   parts.push(
     [
       "Стиль ответа: художественный ролевой формат в духе character-chat.",
@@ -72,6 +241,7 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
       "Если нужно отреагировать на пользователя, ссылайся только на уже написанное им сообщение без дописывания новых действий.",
       "Можно описывать только реакцию персонажа на уже сказанное пользователем и предлагать пользователю выбор.",
       "Не вставляй реплики за пользователя и не дописывай продолжение его фраз.",
+      "Если игрок пишет указания в квадратных скобках […], это мета-правила сцены — выполняй их, не цитируй и не пересказывай вслух.",
       "Не копируй и не пересказывай дословно прошлые сообщения чата — только новая реакция на последнюю реплику.",
       "Не описывай тело, мимику и действия пользователя (ты/твой/твоя/за твоей спиной) — только персонаж и его реакция.",
       "Формат как в Character.ai: 2–4 смысловых абзаца на ответ, НЕ дроби каждое предложение отдельно.",
@@ -88,7 +258,7 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
       "Не добавляй бессмысленный 'красивый хвост' в конце ответа.",
       "Соблюдай нормы русского языка: орфография, пунктуация, согласование слов, естественные формулировки.",
       "Если пользователь не просил иначе, отвечай на русском.",
-      "Не выдумывай случайные факты, если их нет в сценарии или истории чата.",
+      "Не выдумывай случайные факты, если их нет в биографии, сценарии или истории чата.",
       "Не пиши бессвязные и противоречивые фразы; сохраняй причинно-следственную логику.",
       "Контент только для широкой аудитории: без откровенных сексуальных сцен, порнографии, эротических подробностей телесных актов.",
       "Без графического насилия, изнасилования, жестоких подробностей травм и калечения; без пропаганды наркотиков.",
@@ -98,21 +268,12 @@ function buildSystemPrompt(botSystemPrompt, personaPrompt, botName) {
     ].join("\n"),
   );
 
-  if (promptMetadata?.scenario || scenario) {
-    parts.push(`Сценарий:\n${String(promptMetadata?.scenario || scenario).trim()}`);
-  }
-  if (roleplayRules && String(roleplayRules).trim()) {
-    parts.push(`Правила отыгрыша:\n${String(roleplayRules).trim()}`);
-  }
-  if (memoryFacts && String(memoryFacts).trim()) {
-    parts.push(`Факты для памяти:\n${String(memoryFacts).trim()}`);
-  }
-  if (characterRules && String(characterRules).trim()) {
-    parts.push(`Ограничения:\n${String(characterRules).trim()}`);
-  }
-
-  if (!promptMetadata && rawSystemPrompt.trim()) {
-    parts.push(`Дополнительные настройки:\n${rawSystemPrompt.trim().slice(0, 1500)}`);
+  const resolvedPersonaName = String(personaName || "").trim();
+  parts.push(buildNeverSpeakForUserRules(resolvedPersonaName));
+  if (resolvedPersonaName) {
+    parts.push(
+      `Плейсхолдер {{user}} в сценарии и истории — это игрок «${resolvedPersonaName}». Обращайся к нему по имени, но никогда не пиши его реплики и действия.`,
+    );
   }
 
   if (personaPrompt && personaPrompt.trim()) {
@@ -133,12 +294,30 @@ function buildMessagesForLlmApi(
   botName,
   customPrompt,
   history,
+  personaName,
+  botProfile = {},
 ) {
-  const systemParts = [buildSystemPrompt(botSystemPrompt, personaPrompt, botName)];
+  const { history: preparedHistory, userDirectives } = prepareHistoryForLlm(history);
+
+  const systemParts = [
+    buildSystemPrompt(
+      botSystemPrompt,
+      personaPrompt,
+      botName,
+      personaName,
+      botProfile,
+    ),
+  ];
+  const directivesBlock = formatUserDirectivesForSystemPrompt(userDirectives);
+  if (directivesBlock) {
+    systemParts.push(directivesBlock);
+  }
   const extra = String(customPrompt || "").trim();
   if (extra) {
     systemParts.push(`Дополнительные инструкции:\n${extra}`);
   }
+
+  systemParts.push(buildPreGenerationUserAgencyReminder(personaName));
 
   const messages = [
     {
@@ -147,7 +326,7 @@ function buildMessagesForLlmApi(
     },
   ];
 
-  for (const item of history || []) {
+  for (const item of preparedHistory) {
     const role = item?.role === "user" ? "user" : "assistant";
     const content = String(item?.content || "").trim();
     if (!content) continue;
@@ -157,7 +336,7 @@ function buildMessagesForLlmApi(
   return messages;
 }
 
-function mapMessagesToOllamaHistory(rows) {
+function mapMessagesToOllamaHistory(rows, tokenContext = {}) {
   const policyUserPlaceholder = "[Сообщение скрыто по правилам площадки.]";
   return rows
     .slice()
@@ -172,6 +351,8 @@ function mapMessagesToOllamaHistory(rows) {
       let content = String(plainContent || "");
       if (isUser && Number(row.policy_violation) === 1) {
         content = policyUserPlaceholder;
+      } else {
+        content = substituteChatTokens(content, tokenContext);
       }
       return {
         role: isUser ? "user" : "assistant",
@@ -201,7 +382,7 @@ function getPromptSection(promptText, sectionTitle) {
 
   const escaped = sectionTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const sectionRegex = new RegExp(
-    `${escaped}\\s*\\n([\\s\\S]*?)(?:\\n(?:Биография персонажа:|Сценарий:|Правила отыгрыша роли:|Ключевые факты для памяти:|Ограничения и предупреждения:|Метки:)|$)`,
+    `${escaped}\\s*\\n([\\s\\S]*?)(?:\\n(?:Биография персонажа:|Сценарий:|Правила отыгрыша роли:|Ключевые факты для памяти:|Ограничения и предупреждения:|Тип персонажа:|Примеры диалогов:|Метки:)|$)`,
     "i",
   );
   const match = text.match(sectionRegex);
@@ -242,12 +423,19 @@ async function buildBotReplyFromHistory(
     : [chatId, CHAT_HISTORY_LIMIT];
   const historyRows = await dbQuery(historySql, historyParams);
 
-  return generateBotReply({
+  const streamOnDelta = typeof flags.onDelta === "function" ? flags.onDelta : null;
+  const streamSignal = flags.signal;
+
+  const replyParams = {
     botName: chat.bot_name,
     botSystemPrompt: chat.bot_system_prompt,
+    botProfile: buildBotProfileFromChat(chat),
     personaPrompt: String(personaPrompt || ""),
     personaName: String(personaName || ""),
-    history: mapMessagesToOllamaHistory(historyRows),
+    history: mapMessagesToOllamaHistory(historyRows, {
+      personaName: String(personaName || ""),
+      charName: chat.bot_name,
+    }),
     regenerate: Boolean(flags.regenerate),
     swipeAlternative: Boolean(flags.swipe),
     continuePartial: String(flags.continuePartial || "").trim(),
@@ -255,16 +443,50 @@ async function buildBotReplyFromHistory(
       ? flags.previousVariants.map((v) => String(v || "").trim()).filter(Boolean)
       : [],
     runtimeConfig,
-  });
+  };
+
+  if (streamOnDelta) {
+    return generateBotReplyStream({
+      ...replyParams,
+      onDelta: streamOnDelta,
+      signal: streamSignal,
+    });
+  }
+
+  return generateBotReply(replyParams);
 }
 
 function mergeMessageContinuation(partial, addition) {
-  const head = String(partial || "").trimEnd();
-  const tail = String(addition || "").trim();
-  if (!tail) return head;
-  if (!head) return finalizeBotReplyText(tail);
-  const sep = head.endsWith("\n") ? "" : "\n\n";
-  return finalizeBotReplyText(head + sep + tail);
+  return finalizeBotReplyText(mergeContinuationText(partial, addition));
+}
+
+function buildContinueInstruction(partialText) {
+  const partial = String(partialText || "").trim();
+  const tailHint = partial.slice(-140);
+  return [
+    "Продолжи этот же ответ персонажа ровно с места обрыва.",
+    tailHint ? `Текст оборвался на: «${tailHint}»` : "",
+    "Выведи ТОЛЬКО символы и слова, которые идут СРАЗУ после этого места.",
+    "Если слово оборвано — допиши его и продолжай без пробела в начале.",
+    "НЕ повторяй уже написанный текст — ни целых абзацев, ни предложений, ни фраз из начала ответа.",
+    "НЕ переписывай и НЕ пересказывай предыдущие абзацы — только новое продолжение в конце.",
+    "НЕ начинай новый абзац, если предложение не закончено.",
+    "Не начинай ответ заново. Не добавляй действия и реплики за пользователя ({{user}}).",
+    "Продолжай только речь и действия СВОЕГО персонажа — не описывай игрока.",
+    ROLEPLAY_FORMAT_REWRITE_HINT,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function appendPreGenerationUserAgencyGate(messages, personaName, botName = "") {
+  return [
+    ...messages,
+    {
+      role: "user",
+      content: buildPreGenerationUserAgencyUserMessage(personaName, botName),
+    },
+  ];
 }
 
 function appendUniquenessInstruction(messages, previousVariants = []) {
@@ -398,6 +620,168 @@ async function requestOllamaChat(model, messages, optionOverrides = {}, runtimeC
       throw new Error("Пустой ответ от модели");
     }
 
+    return text;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function combineAbortSignals(primary, secondary) {
+  if (!primary && !secondary) return undefined;
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (primary.aborted || secondary.aborted) {
+    controller.abort();
+    return controller.signal;
+  }
+  primary.addEventListener("abort", abort, { once: true });
+  secondary.addEventListener("abort", abort, { once: true });
+  return controller.signal;
+}
+
+/** Потоковый запрос к Ollama / OpenAI-совместимому прокси. onDelta(delta, accumulated). */
+async function streamOllamaChat(
+  model,
+  messages,
+  optionOverrides = {},
+  runtimeConfig = {},
+  onDelta,
+  abortSignal,
+) {
+  const timeoutController = new AbortController();
+  const timeoutId = setTimeout(() => timeoutController.abort(), OLLAMA_TIMEOUT_MS);
+  const signal = combineAbortSignals(abortSignal, timeoutController.signal);
+
+  let accumulated = "";
+
+  try {
+    const options = {
+      temperature: OLLAMA_TEMPERATURE,
+      top_p: OLLAMA_TOP_P,
+      repeat_penalty: OLLAMA_REPEAT_PENALTY,
+      seed: Math.floor(Math.random() * 2147483647),
+      ...optionOverrides,
+    };
+
+    const proxyUrl = String(runtimeConfig?.proxy_url || "").trim();
+    const proxyModel = String(runtimeConfig?.model || "").trim();
+    const proxyApiKey = String(runtimeConfig?.api_key || "").trim();
+    const useProxy = Boolean(proxyUrl);
+
+    if (useProxy && !proxyApiKey) {
+      throw new Error(
+        "LLM error (401): не указан ключ API. Добавьте LLM_API_KEY в .env на сервере или cpk_... в настройках прокси.",
+      );
+    }
+
+    const proxyReferer = String(runtimeConfig?.http_referer || "").trim();
+    const proxyTitle = String(runtimeConfig?.x_title || "").trim();
+    const response = await fetch(useProxy ? proxyUrl : `${OLLAMA_BASE_URL}/api/chat`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(useProxy && proxyApiKey ? { Authorization: `Bearer ${proxyApiKey}` } : {}),
+        ...(useProxy && proxyReferer ? { "HTTP-Referer": proxyReferer } : {}),
+        ...(useProxy && proxyTitle ? { "X-Title": proxyTitle } : {}),
+      },
+      body: JSON.stringify(
+        useProxy
+          ? {
+              model: proxyModel || model,
+              messages,
+              temperature: options.temperature,
+              top_p: options.top_p,
+              max_tokens: Number(process.env.LLM_MAX_TOKENS) || 1024,
+              stream: true,
+            }
+          : {
+              model,
+              stream: true,
+              messages,
+              options,
+            },
+      ),
+      signal,
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      const apiErr =
+        (typeof data?.error === "object" && data.error?.message) ||
+        (typeof data?.error === "string" && data.error) ||
+        data?.message ||
+        (typeof data?.detail === "string" && data.detail) ||
+        "";
+      const detail = String(apiErr || "").trim();
+      throw new Error(
+        detail
+          ? `LLM error (${response.status}): ${detail}`
+          : `LLM error (${response.status})`,
+      );
+    }
+
+    if (!response.body) {
+      throw new Error("Потоковый ответ модели недоступен");
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      if (useProxy) {
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) continue;
+          const payload = trimmed.slice(5).trim();
+          if (!payload || payload === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(payload);
+            const delta = String(
+              parsed?.choices?.[0]?.delta?.content ??
+                parsed?.choices?.[0]?.text ??
+                "",
+            );
+            if (delta) {
+              accumulated += delta;
+              if (typeof onDelta === "function") onDelta(delta, accumulated);
+            }
+          } catch {
+            /* ignore malformed SSE chunk */
+          }
+        }
+      } else {
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line);
+            const delta = String(parsed?.message?.content || "");
+            if (delta) {
+              accumulated += delta;
+              if (typeof onDelta === "function") onDelta(delta, accumulated);
+            }
+          } catch {
+            /* ignore malformed NDJSON chunk */
+          }
+        }
+      }
+    }
+
+    const text = stripModelReasoningArtifacts(accumulated);
+    if (!text) {
+      throw new Error("Пустой ответ от модели");
+    }
     return text;
   } finally {
     clearTimeout(timeoutId);
@@ -612,6 +996,27 @@ function containsUserAgencyViolation(text, personaName = "") {
   return hasUserAgencyViolation(text, personaName);
 }
 
+function hasCriticalPolicyViolation(text) {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  return containsAdultOrExplicitSignals(value) || textContainsHardSexualSlur(value);
+}
+
+/** Убирает только параграфы с нарушением «бот пишет за игрока», не трогая остальной текст. */
+function stripUserAgencyViolations(text, personaName = "") {
+  const source = String(text || "").trim();
+  if (!source) return source;
+
+  const blocks = source.split(/\n{2,}/);
+  const kept = blocks.filter(
+    (block) => !containsUserAgencyViolation(String(block || "").trim(), personaName),
+  );
+  const merged = kept.join("\n\n").trim();
+  if (!merged) return source;
+  if (merged.length < Math.min(80, source.length * 0.35)) return source;
+  return merged;
+}
+
 function hasPoorRussianQuality(text) {
   const value = String(text || "");
   if (!value.trim()) return true;
@@ -640,9 +1045,9 @@ function hasBadRoleplayStructure(text) {
   return false;
 }
 
-function hasBadDialogueFormatting(text) {
+function hasBadDialogueFormatting(text, personaName = "") {
   const structured = formatRoleplayReplyStructure(String(text || "").trim());
-  return !validateRoleplayFormatting(structured).ok;
+  return !validateRoleplayFormatting(structured, personaName).ok;
 }
 
 function hasLogicalFlowIssues(text) {
@@ -869,7 +1274,7 @@ function isReplyAcceptable(text, botName, personaName, history = [], previousVar
     !containsUserAgencyViolation(structured, personaName) &&
     !hasFirstPersonSelfReference(structured) &&
     !hasBadRoleplayStructure(structured) &&
-    !hasBadDialogueFormatting(structured) &&
+    !hasBadDialogueFormatting(structured, personaName) &&
     !hasLogicalFlowIssues(structured) &&
     !hasPoorRussianQuality(structured) &&
     !hasObviousRussianGrammarErrors(structured) &&
@@ -897,6 +1302,7 @@ async function ensureMinimumReplyQuality(
   const uniqueHint = buildVariantUniquenessHint(previousVariants);
   const fixHint = [
     "Полностью перепиши ответ. Исправь всё:",
+    "— НИКОГДА не пиши за {{user}}: ни реплик, ни действий, ни мыслей игрока;",
     "— не копируй и не повторяй прошлые сообщения чата;",
     "— не описывай тело и действия пользователя (ты, твой, твоя, за твоей спиной);",
     '— в "лапках" только прямая речь персонажа, не описание сцены;',
@@ -948,9 +1354,10 @@ async function enforceReplyQuality(
     const lastUserMessage = getLastUserMessageFromHistory(baseMessages);
     const rewriteInstruction = [
       "Перепиши ответ строго по правилам.",
+      "0) НИКОГДА не пиши за {{user}} (игрока): ни реплик, ни действий, ни мыслей — только свой персонаж.",
       "1) Повествование и *действия* — только 3-е лицо (он/она/имя); «я/мне/мой» только внутри \"прямой речи\".",
       "2) Не пиши за пользователя и не описывай его действия как факт.",
-      `2.1) Не используй имя персоны пользователя "${String(personaName || "").trim()}" в связке с глаголами действий.`,
+      `2.1) Не используй имя персоны пользователя "${String(personaName || "").trim()}" в связке с глаголами действий или речи.`,
       `3) Формат: ${ROLEPLAY_FORMAT_REWRITE_HINT}`,
       `3.1) Обязательно дай прямую реакцию на последнюю реплику пользователя: "${lastUserMessage || "..."}.`,
       "3.2) Первые 1-2 предложения должны логически отвечать именно на неё.",
@@ -1033,9 +1440,355 @@ async function enforceReplyQuality(
   return currentReply;
 }
 
+async function rewriteForUserAgencyViolation(
+  model,
+  baseMessages,
+  draftReply,
+  personaName,
+  samplingOptions = {},
+  runtimeConfig = {},
+) {
+  const userRef = String(personaName || "").trim() || "{{user}}";
+  const instruction = [
+    `Текст ниже нарушает правило: бот написал за игрока (${userRef}).`,
+    "Перепиши ответ полностью.",
+    `Убери все реплики, действия, мысли и описания тела/голоса ${userRef}.`,
+    "Оставь только реакцию твоего персонажа на уже написанное игроком.",
+    `Не используй имя «${userRef}» с глаголами действия или речи.`,
+    "Не помещай игрока в *звёздочки* и не пиши «голос/глаза/поза» игрока.",
+    ROLEPLAY_FORMAT_REWRITE_HINT,
+    "Верни только исправленный текст.",
+  ].join("\n");
+
+  const rewritten = await requestOllamaChat(
+    model,
+    [
+      ...baseMessages,
+      { role: "assistant", content: String(draftReply || "").trim() },
+      { role: "user", content: instruction },
+    ],
+    { ...samplingOptions, temperature: 0.35, top_p: 0.82 },
+    runtimeConfig,
+  );
+  return String(rewritten || "").trim();
+}
+
+async function expandReplyIfNeeded(reply, ctx) {
+  const {
+    chatModel,
+    messages,
+    botName,
+    personaName,
+    samplingOptions,
+    runtimeConfig,
+    knownVariants,
+  } = ctx;
+
+  const expansionMessages = [
+    ...messages,
+    { role: "assistant", content: reply },
+    {
+      role: "user",
+      content:
+        `Сделай ответ значительно более развернутым и атмосферным: эмоции, реакция персонажа, детали сцены. ${ROLEPLAY_FORMAT_REWRITE_HINT} Не сокращай. Не добавляй текст и действия за пользователя. Без откровенного секса, порнографии и жестокого насилия. Без мата и без сексуальных/гендерных оскорблений — не повторяй брань из реплики пользователя; только лёгкие междометия при необходимости.`,
+    },
+  ];
+
+  const expandedDraft = await requestOllamaChat(
+    chatModel,
+    expansionMessages,
+    samplingOptions,
+    runtimeConfig,
+  );
+  const polished = await polishRussianReply(
+    chatModel,
+    messages,
+    expandedDraft,
+    samplingOptions,
+    runtimeConfig,
+  );
+  let expanded = finalizeBotReplyText(String(polished || "").trim());
+  if (containsUserAgencyViolation(expanded, personaName)) {
+    expanded = finalizeBotReplyText(
+      await rewriteForUserAgencyViolation(
+        chatModel,
+        messages,
+        expanded,
+        personaName,
+        samplingOptions,
+        runtimeConfig,
+      ),
+    );
+  }
+  return enforceReplyQuality(
+    chatModel,
+    messages,
+    expanded,
+    botName,
+    personaName,
+    samplingOptions,
+    runtimeConfig,
+    knownVariants,
+  );
+}
+
+/**
+ * Лёгкая постобработка после стрима: только форматирование и точечные правки.
+ * Не переписывает весь ответ и не подменяет коротким fallback — пользователь уже видел поток.
+ */
+async function postProcessStreamedReply(draftReply, ctx) {
+  let reply = finalizeBotReplyText(String(draftReply || "").trim());
+  if (!reply) return reply;
+
+  const {
+    chatModel,
+    messages,
+    personaName,
+    samplingOptions = {},
+    runtimeConfig = {},
+  } = ctx;
+
+  if (containsUserAgencyViolation(reply, personaName)) {
+    const stripped = finalizeBotReplyText(stripUserAgencyViolations(reply, personaName));
+    if (
+      stripped &&
+      stripped.length >= reply.length * 0.45 &&
+      !containsUserAgencyViolation(stripped, personaName)
+    ) {
+      reply = stripped;
+    }
+  }
+
+  if (hasCriticalPolicyViolation(reply)) {
+    const fixed = await requestOllamaChat(
+      chatModel,
+      [
+        ...messages,
+        { role: "assistant", content: reply },
+        {
+          role: "user",
+          content: [
+            "Убери откровенный секс, порнографию, графическое насилие и тяжёлые оскорбления.",
+            "Сохрани длину, атмосферу и структуру ответа; не сокращай.",
+            "Не пиши за игрока. Верни только исправленный текст.",
+          ].join(" "),
+        },
+      ],
+      { ...samplingOptions, temperature: 0.35, top_p: 0.82 },
+      runtimeConfig,
+    );
+    const polished = finalizeBotReplyText(String(fixed || "").trim());
+    if (polished && polished.length >= reply.length * 0.55) {
+      reply = polished;
+    }
+  }
+
+  return reply;
+}
+
+/**
+ * Единая постобработка для всех путей: Ollama, прокси (Chutes/OpenAI), стрим и без стрима.
+ */
+async function postProcessGeneratedReply(
+  draftReply,
+  ctx,
+  { polish = false, allowExpansion = true, userAgencyVerified = false } = {},
+) {
+  const {
+    chatModel,
+    messages,
+    botName,
+    personaName,
+    samplingOptions,
+    runtimeConfig,
+    knownVariants,
+  } = ctx;
+
+  let reply = finalizeBotReplyText(String(draftReply || "").trim());
+
+  if (polish) {
+    reply = finalizeBotReplyText(
+      await polishRussianReply(
+        chatModel,
+        messages,
+        reply,
+        samplingOptions,
+        runtimeConfig,
+      ),
+    );
+  }
+
+  if (
+    !userAgencyVerified &&
+    containsUserAgencyViolation(reply, personaName)
+  ) {
+    reply = finalizeBotReplyText(
+      await rewriteForUserAgencyViolation(
+        chatModel,
+        messages,
+        reply,
+        personaName,
+        samplingOptions,
+        runtimeConfig,
+      ),
+    );
+  }
+
+  reply = await enforceReplyQuality(
+    chatModel,
+    messages,
+    reply,
+    botName,
+    personaName,
+    samplingOptions,
+    runtimeConfig,
+    knownVariants,
+  );
+
+  if (isReplyAcceptable(reply, botName, personaName, messages, knownVariants)) {
+    return finalizeBotReplyText(reply);
+  }
+
+  if (allowExpansion) {
+    reply = await expandReplyIfNeeded(reply, ctx);
+    if (isReplyAcceptable(reply, botName, personaName, messages, knownVariants)) {
+      return finalizeBotReplyText(reply);
+    }
+  }
+
+  return finalizeBotReplyText(
+    buildHardSafeFallbackReply(
+      botName,
+      [...knownVariants, reply],
+      knownVariants.length + 1,
+    ),
+  );
+}
+
+async function streamBotReplyPlain({
+  chatModel,
+  messages,
+  samplingOptions,
+  runtimeConfig,
+  onDelta,
+  signal,
+}) {
+  const text = await streamOllamaChat(
+    chatModel,
+    messages,
+    samplingOptions,
+    runtimeConfig,
+    onDelta,
+    signal,
+  );
+  return stripModelReasoningArtifacts(String(text || "").trim());
+}
+
+/** Потоковая генерация + постобработка (проверка «не писать за {{user}}» и правки). */
+async function generateBotReplyStream({
+  botName,
+  botSystemPrompt,
+  botProfile = {},
+  personaPrompt,
+  personaName,
+  history,
+  regenerate = false,
+  swipeAlternative = false,
+  continuePartial = "",
+  previousVariants = [],
+  runtimeConfig = {},
+  onDelta,
+  signal,
+}) {
+  const knownVariants = (previousVariants || []).map((v) => String(v || "").trim()).filter(Boolean);
+  let samplingOptions = buildSamplingOptions(regenerate);
+  if (Number.isFinite(Number(runtimeConfig?.temperature))) {
+    samplingOptions = {
+      ...samplingOptions,
+      temperature: Number(runtimeConfig.temperature),
+    };
+  }
+  if (Number.isFinite(Number(runtimeConfig?.top_p))) {
+    samplingOptions = {
+      ...samplingOptions,
+      top_p: Number(runtimeConfig.top_p),
+    };
+  }
+  if (swipeAlternative) {
+    const variantBoost = Math.min(0.12, knownVariants.length * 0.02);
+    samplingOptions = {
+      ...samplingOptions,
+      temperature: Math.min(
+        0.98,
+        (samplingOptions.temperature ?? OLLAMA_TEMPERATURE) + 0.14 + variantBoost,
+      ),
+      top_p: Math.max(samplingOptions.top_p ?? OLLAMA_TOP_P, 0.92),
+      repeat_penalty: Math.min(
+        1.38,
+        (samplingOptions.repeat_penalty ?? OLLAMA_REPEAT_PENALTY) + 0.08 + variantBoost,
+      ),
+    };
+  }
+
+  const customPrompt = String(runtimeConfig?.custom_prompt || "").trim();
+  const chatModel = String(runtimeConfig?.model || "").trim() || OLLAMA_MODEL;
+
+  let messages = buildMessagesForLlmApi(
+    botSystemPrompt,
+    personaPrompt,
+    botName,
+    customPrompt,
+    history,
+    personaName,
+    botProfile,
+  );
+  if ((regenerate || swipeAlternative) && knownVariants.length) {
+    messages = appendUniquenessInstruction(messages, knownVariants);
+  }
+
+  const partialText = String(continuePartial || "").trim();
+  if (partialText) {
+    messages = [
+      ...messages,
+      { role: "assistant", content: partialText },
+      {
+        role: "user",
+        content: buildContinueInstruction(partialText),
+      },
+    ];
+  }
+
+  messages = appendPreGenerationUserAgencyGate(messages, personaName, botName);
+
+  const draft = await streamBotReplyPlain({
+    chatModel,
+    messages,
+    samplingOptions: partialText
+      ? {
+          ...samplingOptions,
+          temperature: Math.min(0.9, (samplingOptions.temperature ?? OLLAMA_TEMPERATURE) + 0.08),
+        }
+      : samplingOptions,
+    runtimeConfig,
+    onDelta,
+    signal,
+  });
+
+  return postProcessStreamedReply(draft, {
+    chatModel,
+    messages,
+    botName,
+    personaName,
+    samplingOptions,
+    runtimeConfig,
+    knownVariants,
+  });
+}
+
 async function generateBotReply({
   botName,
   botSystemPrompt,
+  botProfile = {},
   personaPrompt,
   personaName,
   history,
@@ -1085,6 +1838,8 @@ async function generateBotReply({
     botName,
     customPrompt,
     history,
+    personaName,
+    botProfile,
   );
   if ((regenerate || swipeAlternative) && knownVariants.length) {
     messages = appendUniquenessInstruction(messages, knownVariants);
@@ -1097,15 +1852,14 @@ async function generateBotReply({
       { role: "assistant", content: partialText },
       {
         role: "user",
-        content: [
-          "Продолжи этот же ответ персонажа с места, где он оборвался.",
-          "Выведи ТОЛЬКО новый фрагмент — без повтора уже написанного текста.",
-          ROLEPLAY_FORMAT_REWRITE_HINT,
-          "Не начинай ответ заново. Не добавляй действия и реплики за пользователя.",
-        ].join(" "),
+        content: buildContinueInstruction(partialText),
       },
     ];
+  }
 
+  messages = appendPreGenerationUserAgencyGate(messages, personaName, botName);
+
+  if (partialText) {
     const continuationDraft = await requestOllamaChat(
       chatModel,
       messages,
@@ -1115,161 +1869,45 @@ async function generateBotReply({
       },
       runtimeConfig,
     );
-    const polished = await polishRussianReply(
-      chatModel,
-      messages,
+    return postProcessGeneratedReply(
       continuationDraft,
-      samplingOptions,
-      runtimeConfig,
+      {
+        chatModel,
+        messages,
+        botName,
+        personaName,
+        samplingOptions,
+        runtimeConfig,
+        knownVariants,
+      },
+      { polish: true, allowExpansion: false },
     );
-    return finalizeBotReplyText(String(polished || "").trim());
   }
 
-  // Прокси: один основной запрос + при необходимости одна правка (без длинной цепочки).
-  if (usingProxy) {
-    const draft = await requestOllamaChat(
-      chatModel,
-      messages,
-      samplingOptions,
-      runtimeConfig,
+  const processCtx = {
+    chatModel,
+    messages,
+    botName,
+    personaName,
+    samplingOptions,
+    runtimeConfig,
+    knownVariants,
+  };
+
+  const runGeneration = async (model) =>
+    postProcessGeneratedReply(
+      await requestOllamaChat(model, messages, samplingOptions, runtimeConfig),
+      { ...processCtx, chatModel: model },
+      { polish: true, allowExpansion: true },
     );
-    return ensureMinimumReplyQuality(
-      chatModel,
-      messages,
-      draft,
-      botName,
-      personaName,
-      samplingOptions,
-      runtimeConfig,
-      knownVariants,
-    );
-  }
 
   try {
-    let reply = await requestOllamaChat(chatModel, messages, samplingOptions, runtimeConfig);
-    reply = await polishRussianReply(chatModel, messages, reply, samplingOptions, runtimeConfig);
-    reply = await enforceReplyQuality(
-      chatModel,
-      messages,
-      reply,
-      botName,
-      personaName,
-      samplingOptions,
-      runtimeConfig,
-      knownVariants,
-    );
-    if (isReplyAcceptable(reply, botName, personaName, messages, knownVariants)) {
-      return finalizeBotReplyText(reply);
-    }
-
-    const expansionMessages = [
-      ...messages,
-      {
-        role: "assistant",
-        content: reply,
-      },
-      {
-        role: "user",
-        content:
-          `Сделай ответ значительно более развернутым и атмосферным: эмоции, реакция персонажа, детали сцены. ${ROLEPLAY_FORMAT_REWRITE_HINT} Не сокращай. Не добавляй текст и действия за пользователя. Без откровенного секса, порнографии и жестокого насилия. Без мата и без сексуальных/гендерных оскорблений — не повторяй брань из реплики пользователя; только лёгкие междометия при необходимости.`,
-      },
-    ];
-
-    const expandedDraft = await requestOllamaChat(
-      chatModel,
-      expansionMessages,
-      samplingOptions,
-      runtimeConfig,
-    );
-    const polishedExpandedDraft = await polishRussianReply(
-      chatModel,
-      messages,
-      expandedDraft,
-      samplingOptions,
-      runtimeConfig,
-    );
-    const expanded = await enforceReplyQuality(
-      chatModel,
-      messages,
-      polishedExpandedDraft,
-      botName,
-      personaName,
-      samplingOptions,
-      runtimeConfig,
-      knownVariants,
-    );
-    return finalizeBotReplyText(expanded);
+    return await runGeneration(chatModel);
   } catch (primaryError) {
-    if (usingProxy) {
+    if (usingProxy || !OLLAMA_FALLBACK_MODEL || OLLAMA_FALLBACK_MODEL === chatModel) {
       throw primaryError;
     }
-    if (!OLLAMA_FALLBACK_MODEL || OLLAMA_FALLBACK_MODEL === chatModel) {
-      throw primaryError;
-    }
-
-    let fallbackReply = await requestOllamaChat(
-      OLLAMA_FALLBACK_MODEL,
-      messages,
-      samplingOptions,
-      runtimeConfig,
-    );
-    fallbackReply = await polishRussianReply(
-      OLLAMA_FALLBACK_MODEL,
-      messages,
-      fallbackReply,
-      samplingOptions,
-      runtimeConfig,
-    );
-    fallbackReply = await enforceReplyQuality(
-      OLLAMA_FALLBACK_MODEL,
-      messages,
-      fallbackReply,
-      botName,
-      personaName,
-      samplingOptions,
-      runtimeConfig,
-      knownVariants,
-    );
-    if (isReplyAcceptable(fallbackReply, botName, personaName, messages, knownVariants)) {
-      return finalizeBotReplyText(fallbackReply);
-    }
-
-    const fallbackExpansionMessages = [
-      ...messages,
-      {
-        role: "assistant",
-        content: fallbackReply,
-      },
-      {
-        role: "user",
-        content:
-          "Сделай ответ более длинным и выразительным: эмоции, действия персонажа, атмосфера, развитие сцены. Не пиши за пользователя и не описывай его действия как факт. Без откровенного секса, порнографии и жестокого насилия. Без мата и без сексуальных/гендерных оскорблений — не повторяй брань из реплики пользователя; только лёгкие междометия при необходимости.",
-      },
-    ];
-    const fallbackExpanded = await requestOllamaChat(
-      OLLAMA_FALLBACK_MODEL,
-      fallbackExpansionMessages,
-      samplingOptions,
-      runtimeConfig,
-    );
-    const polishedFallbackExpanded = await polishRussianReply(
-      OLLAMA_FALLBACK_MODEL,
-      messages,
-      fallbackExpanded,
-      samplingOptions,
-      runtimeConfig,
-    );
-    const fallbackExpandedChecked = await enforceReplyQuality(
-      OLLAMA_FALLBACK_MODEL,
-      messages,
-      polishedFallbackExpanded,
-      botName,
-      personaName,
-      samplingOptions,
-      runtimeConfig,
-      knownVariants,
-    );
-    return finalizeBotReplyText(fallbackExpandedChecked);
+    return runGeneration(OLLAMA_FALLBACK_MODEL);
   }
 }
 
@@ -1286,11 +1924,17 @@ module.exports = {
   OLLAMA_TOP_P,
   OLLAMA_REPEAT_PENALTY,
   buildSystemPrompt,
+  buildBotProfileFromChat,
+  resolveCharacterDefinition,
   mapMessagesToOllamaHistory,
   extractPromptMetadata,
   getPromptSection,
   buildBotReplyFromHistory,
   generateBotReply,
+  generateBotReplyStream,
+  postProcessGeneratedReply,
+  postProcessStreamedReply,
+  isReplyAcceptable,
   mergeMessageContinuation,
   finalizeBotReplyText,
   buildHardSafeFallbackReply,

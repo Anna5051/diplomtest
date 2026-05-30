@@ -328,14 +328,49 @@ body {
 .form-textarea {
   resize: vertical;
   line-height: 1.55;
+  min-height: 160px;
+  max-height: 520px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(150, 130, 230, 0.72) rgba(14, 12, 36, 0.35);
+  scrollbar-gutter: stable;
+}
+
+.form-textarea::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.form-textarea::-webkit-scrollbar-track {
+  margin: 6px 0;
+  background: rgba(14, 12, 36, 0.35);
+  border-radius: 999px;
+}
+
+.form-textarea::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(170, 150, 255, 0.72),
+    rgba(120, 95, 220, 0.72)
+  );
+  border-radius: 999px;
+  border: 2px solid rgba(14, 12, 36, 0.35);
+}
+
+.form-textarea::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(190, 173, 255, 0.92),
+    rgba(140, 115, 235, 0.88)
+  );
 }
 
 .form-textarea.medium {
-  min-height: 110px;
+  min-height: 200px;
 }
 
 .form-textarea.large {
-  min-height: 170px;
+  min-height: 300px;
 }
 
 .editor-box {
@@ -346,10 +381,44 @@ body {
 }
 
 .editable-box {
-  min-height: 180px;
+  min-height: 320px;
+  max-height: 560px;
+  overflow-y: auto;
   border: none;
   border-radius: 0;
   background: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(150, 130, 230, 0.72) rgba(14, 12, 36, 0.35);
+  scrollbar-gutter: stable;
+}
+
+.editable-box::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.editable-box::-webkit-scrollbar-track {
+  margin: 6px 0;
+  background: rgba(14, 12, 36, 0.35);
+  border-radius: 999px;
+}
+
+.editable-box::-webkit-scrollbar-thumb {
+  background: linear-gradient(
+    180deg,
+    rgba(170, 150, 255, 0.72),
+    rgba(120, 95, 220, 0.72)
+  );
+  border-radius: 999px;
+  border: 2px solid rgba(14, 12, 36, 0.35);
+}
+
+.editable-box::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(
+    180deg,
+    rgba(190, 173, 255, 0.92),
+    rgba(140, 115, 235, 0.88)
+  );
 }
 
 .editable-box.is-empty::before {

@@ -117,7 +117,9 @@ const {
   CHAT_HISTORY_LIMIT,
   MAX_USER_MESSAGE_LENGTH,
   mapMessagesToOllamaHistory,
+  buildBotProfileFromChat,
   generateBotReply,
+  generateBotReplyStream,
   buildBotReplyFromHistory,
   mergeMessageContinuation,
   classifyUserPolicyViolation,
@@ -163,6 +165,48 @@ function dbQuery(sql, params = []) {
       resolve(rows);
     });
   });
+}
+
+function wantsNdjsonStream(req) {
+  const bodyFlag = req.body?.stream;
+  return bodyFlag === true || bodyFlag === 1 || bodyFlag === "1" || req.query?.stream === "1";
+}
+
+function beginNdjsonStream(res) {
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  if (typeof res.flushHeaders === "function") {
+    res.flushHeaders();
+  }
+}
+
+function writeNdjsonEvent(res, payload) {
+  res.write(`${JSON.stringify(payload)}\n`);
+}
+
+function buildLlmStreamCallbacks(res) {
+  return {
+    onDelta: (delta) => {
+      writeNdjsonEvent(res, { type: "chunk", text: delta });
+    },
+  };
+}
+
+function bindRequestAbort(req, res) {
+  const controller = new AbortController();
+  const onClose = () => {
+    if (!res.writableEnded) {
+      controller.abort();
+    }
+  };
+  req.on("close", onClose);
+  return {
+    signal: controller.signal,
+    cleanup: () => req.off("close", onClose),
+  };
 }
 
 /** Первое сообщение бота в чате (приветствие / начало истории) — по порядку как в выдаче API */
@@ -273,6 +317,27 @@ function ensureUserBlockedColumn() {
       return;
     }
     console.warn("БД: не удалось проверить/добавить users.is_blocked —", err.message);
+  });
+}
+
+function ensureUsersProfileBioColumn() {
+  const sql = `
+    ALTER TABLE users
+    ADD COLUMN profile_bio LONGTEXT NULL AFTER avatar_url
+  `;
+
+  db.query(sql, (err) => {
+    if (!err) {
+      console.log("БД: добавлена колонка users.profile_bio");
+      return;
+    }
+    if (err.code === "ER_DUP_FIELDNAME") {
+      return;
+    }
+    console.warn(
+      "БД: не удалось проверить/добавить users.profile_bio —",
+      err.message,
+    );
   });
 }
 
@@ -411,7 +476,11 @@ async function getOwnedChat(chatId, userId) {
         c.user_id,
         c.bot_id,
         b.name AS bot_name,
-        b.system_prompt AS bot_system_prompt
+        b.system_prompt AS bot_system_prompt,
+        b.full_description AS bot_full_description,
+        b.short_description AS bot_short_description,
+        b.tags AS bot_tags,
+        b.greeting_message AS bot_greeting_message
       FROM chats c
       LEFT JOIN bots b ON c.bot_id = b.id
       WHERE c.id = ?
@@ -1041,6 +1110,126 @@ function updateUserAvatar(req, res) {
 
 app.put("/user/avatar", updateUserAvatar);
 app.post("/user/avatar", updateUserAvatar);
+
+const MAX_PROFILE_BIO_LENGTH = 50000;
+
+app.get("/user/:userId/profile", (req, res) => {
+  const userId = Number(req.params.userId);
+
+  if (!userId) {
+    return res.status(400).json({
+      message: "Некорректный id пользователя",
+    });
+  }
+
+  const sql = `
+    SELECT id, username, avatar_url, profile_bio, created_at
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+  `;
+
+  db.query(sql, [userId], (err, rows) => {
+    if (err) {
+      if (err.code === "ER_BAD_FIELD_ERROR") {
+        const fallbackSql = `
+          SELECT id, username, avatar_url, created_at
+          FROM users
+          WHERE id = ?
+          LIMIT 1
+        `;
+        return db.query(fallbackSql, [userId], (fallbackErr, fallbackRows) => {
+          if (fallbackErr) {
+            return res.status(500).json({
+              message: "Ошибка загрузки профиля",
+            });
+          }
+          if (!fallbackRows.length) {
+            return res.status(404).json({
+              message: "Пользователь не найден",
+            });
+          }
+          const user = fallbackRows[0];
+          return res.json({
+            id: user.id,
+            username: user.username,
+            avatar_url: user.avatar_url || "",
+            profile_bio: "",
+            created_at: user.created_at,
+          });
+        });
+      }
+      return res.status(500).json({
+        message: "Ошибка загрузки профиля",
+      });
+    }
+
+    if (!rows.length) {
+      return res.status(404).json({
+        message: "Пользователь не найден",
+      });
+    }
+
+    const user = rows[0];
+    res.json({
+      id: user.id,
+      username: user.username,
+      avatar_url: user.avatar_url || "",
+      profile_bio: user.profile_bio || "",
+      created_at: user.created_at,
+    });
+  });
+});
+
+function updateUserProfileBio(req, res) {
+  const userId = Number(req.body.user_id);
+  const profileBio = String(req.body.profile_bio ?? "");
+
+  if (!userId) {
+    return res.status(400).json({
+      message: "Не указан пользователь",
+    });
+  }
+
+  if (profileBio.length > MAX_PROFILE_BIO_LENGTH) {
+    return res.status(400).json({
+      message: `Описание профиля не длиннее ${MAX_PROFILE_BIO_LENGTH} символов`,
+    });
+  }
+
+  const sql = `
+    UPDATE users
+    SET profile_bio = ?
+    WHERE id = ?
+  `;
+
+  db.query(sql, [profileBio, userId], (err, result) => {
+    if (err) {
+      if (err.code === "ER_BAD_FIELD_ERROR") {
+        return res.status(500).json({
+          message: "Колонка profile_bio отсутствует. Перезапустите сервер для миграции БД.",
+        });
+      }
+      return res.status(500).json({
+        message: "Ошибка сохранения описания профиля",
+      });
+    }
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({
+        message: "Пользователь не найден",
+      });
+    }
+
+    res.json({
+      message: "Описание профиля сохранено ✅",
+      profile_bio: profileBio,
+    });
+  });
+}
+
+app.put("/user/profile-bio", updateUserProfileBio);
+app.post("/user/profile-bio", updateUserProfileBio);
 
 /*Создание бота*/
 app.post("/create-bot", (req, res) => {
@@ -1922,7 +2111,11 @@ app.post("/chat/:chatId/message", (req, res) => {
       c.id,
       c.bot_id,
       b.name AS bot_name,
-      b.system_prompt AS bot_system_prompt
+      b.system_prompt AS bot_system_prompt,
+      b.full_description AS bot_full_description,
+      b.short_description AS bot_short_description,
+      b.tags AS bot_tags,
+      b.greeting_message AS bot_greeting_message
     FROM chats c
     LEFT JOIN bots b ON c.bot_id = b.id
     WHERE c.id = ?
@@ -2040,31 +2233,73 @@ app.post("/chat/:chatId/message", (req, res) => {
             });
           }
 
+          const userMessagePayload = {
+            id: saveUserResult.insertId,
+            chat_id: Number(chatId),
+            sender_type: "user",
+            content: normalizedText,
+            policy_violation: policyViolationFlag,
+          };
+
+          const historyForLlm = mapMessagesToOllamaHistory(historyRows, {
+            personaName: String(persona_name || ""),
+            charName: chat.bot_name,
+          });
+
+          const streamRequested = wantsNdjsonStream(req);
+          const abortBinding = streamRequested ? bindRequestAbort(req, res) : null;
+
           let botReply = "";
           try {
-            botReply = await generateBotReply({
-              botName: chat.bot_name,
-              botSystemPrompt: chat.bot_system_prompt,
-              personaPrompt: String(persona_prompt || ""),
-              personaName: String(persona_name || ""),
-              history: mapMessagesToOllamaHistory(historyRows),
-              runtimeConfig,
-            });
+            if (streamRequested) {
+              beginNdjsonStream(res);
+              writeNdjsonEvent(res, {
+                type: "user_message",
+                user_message: userMessagePayload,
+              });
+
+              botReply = await generateBotReplyStream({
+                botName: chat.bot_name,
+                botSystemPrompt: chat.bot_system_prompt,
+                botProfile: buildBotProfileFromChat(chat),
+                personaPrompt: String(persona_prompt || ""),
+                personaName: String(persona_name || ""),
+                history: historyForLlm,
+                runtimeConfig,
+                signal: abortBinding?.signal,
+                ...buildLlmStreamCallbacks(res),
+              });
+            } else {
+              botReply = await generateBotReply({
+                botName: chat.bot_name,
+                botSystemPrompt: chat.bot_system_prompt,
+                botProfile: buildBotProfileFromChat(chat),
+                personaPrompt: String(persona_prompt || ""),
+                personaName: String(persona_name || ""),
+                history: historyForLlm,
+                runtimeConfig,
+              });
+            }
           } catch (modelErr) {
+            abortBinding?.cleanup();
             const status = httpStatusFromLlmError(modelErr);
             const body = userFacingLlmErrorMessage(modelErr);
             console.warn(`[LLM] send message: ${body}`);
+            if (streamRequested && res.headersSent) {
+              writeNdjsonEvent(res, {
+                type: "error",
+                message: body,
+                llm_error: true,
+                user_message_saved: true,
+                user_message: userMessagePayload,
+              });
+              return res.end();
+            }
             return res.status(status >= 400 && status < 600 ? status : 500).json({
               message: body,
               llm_error: true,
               user_message_saved: true,
-              user_message: {
-                id: saveUserResult.insertId,
-                chat_id: Number(chatId),
-                sender_type: "user",
-                content: normalizedText,
-                policy_violation: policyViolationFlag,
-              },
+              user_message: userMessagePayload,
             });
           }
 
@@ -2080,34 +2315,146 @@ app.post("/chat/:chatId/message", (req, res) => {
           `;
 
           db.query(saveBotMessageSql, [chatId, encryptMessageContentForDb(botReply)], (saveBotErr, saveBotResult) => {
+            abortBinding?.cleanup();
+
             if (saveBotErr) {
+              if (streamRequested && res.headersSent) {
+                writeNdjsonEvent(res, {
+                  type: "error",
+                  message: "Ошибка сохранения ответа бота",
+                });
+                return res.end();
+              }
               return res.status(500).json({
                 message: "Ошибка сохранения ответа бота",
               });
             }
 
             updateChatTimestamp(() => {
+              const savedUserMessage = {
+                ...userMessagePayload,
+                policy_violation: 0,
+              };
+              const replyPayload = {
+                id: saveBotResult.insertId,
+                chat_id: Number(chatId),
+                sender_type: "bot",
+                content: botReply,
+              };
+
+              if (streamRequested) {
+                writeNdjsonEvent(res, {
+                  type: "done",
+                  message: "Сообщение отправлено ✅",
+                  user_message: savedUserMessage,
+                  reply: replyPayload,
+                });
+                return res.end();
+              }
+
               res.json({
                 message: "Сообщение отправлено ✅",
-                user_message: {
-                  id: saveUserResult.insertId,
-                  chat_id: Number(chatId),
-                  sender_type: "user",
-                  content: normalizedText,
-                  policy_violation: 0,
-                },
-                reply: {
-                  id: saveBotResult.insertId,
-                  chat_id: Number(chatId),
-                  sender_type: "bot",
-                  content: botReply,
-                },
+                user_message: savedUserMessage,
+                reply: replyPayload,
               });
             });
           });
         });
       });
   });
+});
+
+app.post("/chat/:chatId/message/partial-bot", async (req, res) => {
+  const { chatId } = req.params;
+  const { user_id, text, message_id } = req.body;
+  const normalizedText = String(text || "").trim();
+
+  if (!user_id) {
+    return res.status(400).json({ message: "Не указан пользователь" });
+  }
+  if (!normalizedText) {
+    return res.status(400).json({ message: "Пустой текст" });
+  }
+  if (normalizedText.length > MAX_USER_MESSAGE_LENGTH) {
+    return res.status(400).json({
+      message: `Сообщение слишком длинное (максимум ${MAX_USER_MESSAGE_LENGTH} символов)`,
+    });
+  }
+
+  try {
+    const ownedChat = await getOwnedChat(chatId, user_id);
+    if (!ownedChat) return res.status(404).json({ message: "Чат не найден" });
+    if (ownedChat === "forbidden") {
+      return res.status(403).json({ message: "Нет доступа к этому чату" });
+    }
+
+    const messageId = Number(message_id);
+    if (Number.isFinite(messageId) && messageId > 0) {
+      const targetRows = await dbQuery(
+        `
+          SELECT id, sender_type
+          FROM messages
+          WHERE id = ? AND chat_id = ?
+          LIMIT 1
+        `,
+        [messageId, chatId],
+      );
+      if (!targetRows.length) {
+        return res.status(404).json({ message: "Сообщение не найдено" });
+      }
+      if (targetRows[0].sender_type !== "bot") {
+        return res.status(400).json({ message: "Можно сохранять только ответ бота" });
+      }
+
+      await dbQuery(
+        `
+          UPDATE messages
+          SET content = ?, content_variants = NULL
+          WHERE id = ? AND chat_id = ?
+        `,
+        [encryptMessageContentForDb(normalizedText), messageId, chatId],
+      );
+      await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+
+      return res.json({
+        message: "Частичный ответ сохранён",
+        reply: {
+          id: messageId,
+          chat_id: Number(chatId),
+          sender_type: "bot",
+          content: normalizedText,
+        },
+      });
+    }
+
+    const insertResult = await dbQuery(
+      `
+        INSERT INTO messages
+        (
+          chat_id,
+          sender_type,
+          content,
+          created_at
+        )
+        VALUES (?, 'bot', ?, NOW())
+      `,
+      [chatId, encryptMessageContentForDb(normalizedText)],
+    );
+    await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+
+    return res.json({
+      message: "Частичный ответ сохранён",
+      reply: {
+        id: insertResult.insertId,
+        chat_id: Number(chatId),
+        sender_type: "bot",
+        content: normalizedText,
+      },
+    });
+  } catch (error) {
+    console.warn("[partial-bot]", error?.message || error);
+    return res.status(500).json({ message: "Ошибка сохранения частичного ответа" });
+  }
 });
 
 app.put("/chat/:chatId/message/:messageId", async (req, res) => {
@@ -2414,16 +2761,52 @@ app.post("/chat/:chatId/message/:messageId/generate-reply", async (req, res) => 
       });
     }
 
-    const botReply = await buildBotReplyFromHistory(
-      dbQuery,
-      chatId,
-      ownedChat,
-      String(persona_prompt || ""),
-      String(persona_name || ""),
-      Number(messageId),
-      {},
-      runtimeConfig,
-    );
+    const botReply = await (async () => {
+      const streamRequested = wantsNdjsonStream(req);
+      const abortBinding = streamRequested ? bindRequestAbort(req, res) : null;
+
+      if (streamRequested) {
+        beginNdjsonStream(res);
+      }
+
+      try {
+        const generated = await buildBotReplyFromHistory(
+          dbQuery,
+          chatId,
+          ownedChat,
+          String(persona_prompt || ""),
+          String(persona_name || ""),
+          Number(messageId),
+          {
+            ...(streamRequested
+              ? {
+                  ...buildLlmStreamCallbacks(res),
+                  signal: abortBinding?.signal,
+                }
+              : {}),
+          },
+          runtimeConfig,
+        );
+        abortBinding?.cleanup();
+        return generated;
+      } catch (error) {
+        abortBinding?.cleanup();
+        if (streamRequested && res.headersSent) {
+          writeNdjsonEvent(res, {
+            type: "error",
+            message: userFacingLlmErrorMessage(error),
+            llm_error: true,
+          });
+          res.end();
+          return null;
+        }
+        throw error;
+      }
+    })();
+
+    if (botReply == null) {
+      return;
+    }
 
     const insertResult = await dbQuery(
       `
@@ -2440,15 +2823,27 @@ app.post("/chat/:chatId/message/:messageId/generate-reply", async (req, res) => 
     );
     await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
 
+    const replyPayload = {
+      id: insertResult.insertId,
+      chat_id: Number(chatId),
+      sender_type: "bot",
+      content: botReply,
+    };
+
+    if (wantsNdjsonStream(req) && res.headersSent) {
+      writeNdjsonEvent(res, {
+        type: "done",
+        message: "Ответ бота получен ✅",
+        regenerated_existing: false,
+        reply: replyPayload,
+      });
+      return res.end();
+    }
+
     return res.json({
       message: "Ответ бота получен ✅",
       regenerated_existing: false,
-      reply: {
-        id: insertResult.insertId,
-        chat_id: Number(chatId),
-        sender_type: "bot",
-        content: botReply,
-      },
+      reply: replyPayload,
     });
   } catch (error) {
     return respondWithLlmError(res, error);
@@ -2531,20 +2926,47 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
       previousVariants = oldMeta.v.map((x) => String(x));
     }
 
-    const regenerated = await buildBotReplyFromHistory(
-      dbQuery,
-      chatId,
-      ownedChat,
-      String(persona_prompt || ""),
-      String(persona_name || ""),
-      upperMessageId,
-      {
-        regenerate: true,
-        swipe: Boolean(swipe),
-        previousVariants,
-      },
-      runtimeConfig,
-    );
+    const streamRequested = wantsNdjsonStream(req);
+    const abortBinding = streamRequested ? bindRequestAbort(req, res) : null;
+
+    if (streamRequested) {
+      beginNdjsonStream(res);
+    }
+
+    let regenerated = "";
+    try {
+      regenerated = await buildBotReplyFromHistory(
+        dbQuery,
+        chatId,
+        ownedChat,
+        String(persona_prompt || ""),
+        String(persona_name || ""),
+        upperMessageId,
+        {
+          regenerate: true,
+          swipe: Boolean(swipe),
+          previousVariants,
+          ...(streamRequested
+            ? {
+                ...buildLlmStreamCallbacks(res),
+                signal: abortBinding?.signal,
+              }
+            : {}),
+        },
+        runtimeConfig,
+      );
+    } catch (error) {
+      abortBinding?.cleanup();
+      if (streamRequested && res.headersSent) {
+        writeNdjsonEvent(res, {
+          type: "error",
+          message: userFacingLlmErrorMessage(error),
+          llm_error: true,
+        });
+        return res.end();
+      }
+      return respondWithLlmError(res, error, "Перегенерация: ");
+    }
 
     const isSwipe = Boolean(swipe);
     let swipeVariantsList = null;
@@ -2584,29 +3006,37 @@ app.post("/chat/:chatId/message/:messageId/regenerate", async (req, res) => {
       );
     }
     await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+    abortBinding?.cleanup();
 
-    if (isSwipe && swipeVariantsList) {
-      return res.json({
+    const replyPayload =
+      isSwipe && swipeVariantsList
+        ? {
+            id: Number(messageId),
+            chat_id: Number(chatId),
+            sender_type: "bot",
+            content: regenerated,
+            _contentVariants: swipeVariantsList,
+            _variantIndex: swipeVariantIndex,
+          }
+        : {
+            id: Number(messageId),
+            chat_id: Number(chatId),
+            sender_type: "bot",
+            content: regenerated,
+          };
+
+    if (streamRequested) {
+      writeNdjsonEvent(res, {
+        type: "done",
         message: "Ответ перегенерирован ✅",
-        reply: {
-          id: Number(messageId),
-          chat_id: Number(chatId),
-          sender_type: "bot",
-          content: regenerated,
-          _contentVariants: swipeVariantsList,
-          _variantIndex: swipeVariantIndex,
-        },
+        reply: replyPayload,
       });
+      return res.end();
     }
 
     return res.json({
       message: "Ответ перегенерирован ✅",
-      reply: {
-        id: Number(messageId),
-        chat_id: Number(chatId),
-        sender_type: "bot",
-        content: regenerated,
-      },
+      reply: replyPayload,
     });
   } catch (error) {
     return respondWithLlmError(res, error, "Перегенерация: ");
@@ -2659,9 +3089,24 @@ app.post("/chat/:chatId/message/:messageId/continue", async (req, res) => {
       });
     }
 
-    const plainOld = decryptMessageContentFromDb(targetRows[0].content);
-    if (!String(plainOld || "").trim()) {
+    const plainOldDb = decryptMessageContentFromDb(targetRows[0].content);
+    const continueFrom = String(req.body?.continue_from || "").trim();
+    let plainOld = continueFrom || String(plainOldDb || "").trim();
+
+    if (!plainOld) {
       return res.status(400).json({ message: "Сообщение пустое" });
+    }
+
+    if (continueFrom && continueFrom !== String(plainOldDb || "").trim()) {
+      await dbQuery(
+        `
+          UPDATE messages
+          SET content = ?, content_variants = NULL
+          WHERE id = ? AND chat_id = ?
+        `,
+        [encryptMessageContentForDb(continueFrom), messageId, chatId],
+      );
+      plainOld = continueFrom;
     }
 
     const previousRows = await dbQuery(
@@ -2676,16 +3121,46 @@ app.post("/chat/:chatId/message/:messageId/continue", async (req, res) => {
     );
     const upperMessageId = previousRows.length ? Number(previousRows[0].id) : null;
 
-    const continuation = await buildBotReplyFromHistory(
-      dbQuery,
-      chatId,
-      ownedChat,
-      String(persona_prompt || ""),
-      String(persona_name || ""),
-      upperMessageId,
-      { continuePartial: plainOld },
-      runtimeConfig,
-    );
+    const streamRequested = wantsNdjsonStream(req);
+    const abortBinding = streamRequested ? bindRequestAbort(req, res) : null;
+
+    if (streamRequested) {
+      beginNdjsonStream(res);
+      writeNdjsonEvent(res, { type: "base", text: plainOld });
+    }
+
+    let continuation = "";
+    try {
+      continuation = await buildBotReplyFromHistory(
+        dbQuery,
+        chatId,
+        ownedChat,
+        String(persona_prompt || ""),
+        String(persona_name || ""),
+        upperMessageId,
+        {
+          continuePartial: plainOld,
+          ...(streamRequested
+            ? {
+                ...buildLlmStreamCallbacks(res),
+                signal: abortBinding?.signal,
+              }
+            : {}),
+        },
+        runtimeConfig,
+      );
+    } catch (error) {
+      abortBinding?.cleanup();
+      if (streamRequested && res.headersSent) {
+        writeNdjsonEvent(res, {
+          type: "error",
+          message: userFacingLlmErrorMessage(error),
+          llm_error: true,
+        });
+        return res.end();
+      }
+      return respondWithLlmError(res, error, "Продолжение: ");
+    }
 
     const merged = mergeMessageContinuation(plainOld, continuation);
     if (!String(merged || "").trim()) {
@@ -2701,15 +3176,27 @@ app.post("/chat/:chatId/message/:messageId/continue", async (req, res) => {
       [encryptMessageContentForDb(merged), messageId, chatId],
     );
     await dbQuery("UPDATE chats SET updated_at = NOW() WHERE id = ?", [chatId]);
+    abortBinding?.cleanup();
+
+    const replyPayload = {
+      id: Number(messageId),
+      chat_id: Number(chatId),
+      sender_type: "bot",
+      content: merged,
+    };
+
+    if (streamRequested) {
+      writeNdjsonEvent(res, {
+        type: "done",
+        message: "Ответ продолжен ✅",
+        reply: replyPayload,
+      });
+      return res.end();
+    }
 
     return res.json({
       message: "Ответ продолжен ✅",
-      reply: {
-        id: Number(messageId),
-        chat_id: Number(chatId),
-        sender_type: "bot",
-        content: merged,
-      },
+      reply: replyPayload,
     });
   } catch (error) {
     return respondWithLlmError(res, error, "Продолжение: ");
@@ -3930,6 +4417,7 @@ function startHttpServer(port) {
         void logLlmModeAtStartup();
         ensurePersonaRoleColumn();
         ensureUserBlockedColumn();
+        ensureUsersProfileBioColumn();
         ensureBotBlockedColumn();
         ensureBotDeletedColumn();
         ensureMessagesPolicyViolationColumn();

@@ -588,16 +588,23 @@ body.chat-overlay-open .modal {
 
 /* ---------- PAGE ---------- */
 
+html {
+  scrollbar-gutter: stable;
+  overflow-y: scroll;
+}
+
 .chat-page {
   /* Узкая колонка по центру, как у Janitor (~800px контента + поля) */
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  max-width: min(820px, calc(100vw - 32px));
+  width: 100%;
+  max-width: 820px;
 
   margin: 0 auto;
 
   padding: 20px 16px 120px;
+  box-sizing: border-box;
 }
 
 .notice {
@@ -674,6 +681,15 @@ body.chat-overlay-open .modal {
 .message-bot {
   flex-direction: row;
   justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.message-avatar--mobile-only {
+  display: none !important;
+}
+
+.message-avatar--desktop-only {
+  display: block;
 }
 
 .message-user {
@@ -724,14 +740,12 @@ body.chat-overlay-open .modal {
   padding: 0;
 }
 
-.message-user-body {
-  display: flex;
-  flex-direction: row;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
+.message-avatar--user-header {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  flex-shrink: 0;
+  margin: 0;
 }
 
 .message-avatar--user-side {
@@ -747,6 +761,20 @@ body.chat-overlay-open .modal {
   font-weight: 700;
   color: #ffffff;
   white-space: nowrap;
+}
+
+.message-user-head .message-card-header-actions--head {
+  flex-shrink: 0;
+}
+
+.message-user-body {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
 }
 
 .message-card-header-actions--head {
@@ -786,17 +814,43 @@ body.chat-overlay-open .modal {
 }
 
 .message-content-col--bot {
-  align-items: flex-start;
+  align-items: stretch;
+  width: 100%;
 }
 
 .message-bot-block {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 4px;
   min-width: 0;
-  flex: 1;
-  max-width: min(720px, 94%);
+  flex: 1 1 0;
+  width: 100%;
+  max-width: min(720px, 100%);
+  box-sizing: border-box;
+}
+
+.message-user-toolbar--placeholder {
+  visibility: hidden;
+  pointer-events: none;
+  min-height: 28px;
+  width: 100%;
+  margin: 0 0 6px;
+  gap: 10px;
+}
+
+.message-user-toolbar--placeholder .message-toolbar-slot,
+.message-actions--placeholder .message-footer-slot {
+  display: inline-block;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.message-actions--placeholder {
+  visibility: hidden;
+  pointer-events: none;
+  min-height: 28px;
 }
 
 .message-bot-meta {
@@ -809,7 +863,19 @@ body.chat-overlay-open .modal {
   min-width: 0;
 }
 
-/* Пузырь по ширине текста (Character.ai) */
+.message-avatar--bot-header {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  flex-shrink: 0;
+}
+
+.message-bot-meta .message-card-header-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* Пузырь по ширине текста (Character.ai); у бота всегда на всю ширину колонки */
 .message-stack {
   flex: 0 1 auto;
   min-width: 0;
@@ -830,14 +896,19 @@ body.chat-overlay-open .modal {
 }
 
 .message-bot .message-stack {
-  width: fit-content;
-  max-width: min(720px, 94%);
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 100%;
+  align-items: stretch;
+  align-self: stretch;
+  flex: 1 1 auto;
 }
 
 .message-user .message-stack {
   width: fit-content;
-  max-width: min(480px, 88vw);
-  align-items: flex-start;
+  max-width: min(520px, 88vw);
+  align-items: stretch;
   padding: 10px 14px;
 }
 
@@ -1052,7 +1123,7 @@ body.chat-overlay-open .modal {
   font-size: 15px;
   line-height: 1.55;
   max-width: 100%;
-  width: auto;
+  width: 100%;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -1070,14 +1141,50 @@ body.chat-overlay-open .modal {
   margin-inline: 0;
   direction: ltr;
   unicode-bidi: plaintext;
-  align-self: flex-start;
-  width: auto;
-  max-width: min(680px, 90vw);
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
+  white-space: normal;
+}
+
+.message-bot .message-bubble .stream-live {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  text-align: start;
+  white-space: pre-wrap;
+  box-sizing: border-box;
+}
+
+.message-bot .message-bubble .stream-live .stream-cursor {
+  display: inline-block;
+  vertical-align: text-bottom;
+}
+
+.message-bubble:not(.message-bubble--streaming) .stream-cursor {
+  display: none !important;
+}
+
+.message-header-chrome-placeholder {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 52px;
+  min-width: 52px;
+  height: 28px;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.message-bot .message-bubble.message-bubble--streaming {
+  width: 100%;
+  max-width: 100%;
 }
 
 .message-bot .message-bubble p {
-  margin: 0 0 0.9em;
+  margin: 0 0 0.75em;
+  text-align: start;
 }
 
 .message-bot .message-bubble p:last-child {
@@ -1087,11 +1194,11 @@ body.chat-overlay-open .modal {
 .message-user .message-bubble {
   padding: 0;
   margin: 0;
-  line-height: 1.45;
+  line-height: 1.55;
   color: #e6e9ed;
-  text-align: right;
-  width: auto;
-  max-width: min(440px, 82vw);
+  text-align: start;
+  width: 100%;
+  max-width: 100%;
   min-width: 0;
   direction: ltr;
   unicode-bidi: plaintext;
@@ -1281,6 +1388,41 @@ body.chat-overlay-open .modal {
   padding: 0;
 }
 
+.message-bubble.message-bubble--streaming {
+  opacity: 1;
+  font-style: normal;
+  min-height: 1.4em;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 0;
+  text-align: start;
+  box-sizing: border-box;
+  white-space: normal;
+}
+
+.stream-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 1px;
+  background: rgba(190, 173, 255, 0.9);
+  animation: stream-cursor-blink 1s step-end infinite;
+}
+
+@keyframes stream-cursor-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
 .message-bubble.message-bubble--unavailable {
   font-size: 13px;
   line-height: 1.45;
@@ -1303,6 +1445,18 @@ body.chat-overlay-open .modal {
 
 .message-content-col--bot .message-bubble-footer {
   align-self: flex-start;
+}
+
+.message-bubble-footer--placeholder {
+  visibility: hidden;
+  pointer-events: none;
+  min-height: 28px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.message-bubble-footer--placeholder .message-actions--placeholder {
+  margin: 0;
 }
 
 .message-bubble-footer--busy {
@@ -2403,7 +2557,7 @@ body.chat-overlay-open .modal {
   }
 
   .chat-page {
-    max-width: min(820px, calc(100vw - 20px));
+    max-width: min(820px, calc(100% - 20px));
     margin-left: auto;
     margin-right: auto;
     padding-left: 10px;
@@ -2423,17 +2577,90 @@ body.chat-overlay-open .modal {
   }
 
   .message-bot {
-    flex-direction: row;
+    flex-direction: column;
     justify-content: flex-start;
-    align-self: flex-start;
+    align-items: stretch;
+    align-self: stretch;
+    width: 100%;
+  }
+
+  .message-avatar--mobile-only {
+    display: block !important;
+  }
+
+  .message-avatar--desktop-only {
+    display: none !important;
+  }
+
+  .message-bot-block {
+    width: 100%;
+    max-width: 100%;
+    margin-inline: auto;
+  }
+
+  .message-bot-meta {
+    justify-content: flex-start;
+    gap: 10px;
+  }
+
+  .message-bot-meta .message-author {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .message-avatar--bot-header {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+  }
+
+  .message-bot .message-stack {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 100%;
+    align-items: stretch;
+    align-self: stretch;
   }
 
   .message-user {
-    justify-content: flex-end;
+    justify-content: center;
+    align-items: stretch;
   }
 
   .message-user-block {
-    max-width: min(96vw, 560px);
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    margin-inline: auto;
+    align-items: stretch;
+  }
+
+  .message-user-column {
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .message-user-head {
+    justify-content: flex-start;
+  }
+
+  .message-user-head .message-author {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: left;
+  }
+
+  .message-user-body {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 0;
+  }
+
+  .message-content-col--user {
+    align-items: stretch;
+    width: 100%;
   }
 
   .message-user-toolbar {
@@ -2441,27 +2668,20 @@ body.chat-overlay-open .modal {
     margin: 0 0 5px;
   }
 
-  .message-avatar--user-side {
+  .message-avatar--user-header {
     width: 32px;
     height: 32px;
     border-radius: 8px;
   }
 
-  .message-bot-block {
-    max-width: min(92vw, 560px);
-  }
-
-  .message-bot .message-stack {
-    max-width: min(92vw, 560px);
-  }
-
   .message-user .message-stack {
-    max-width: min(88vw, 480px);
+    width: 100%;
+    max-width: 100%;
     padding: 9px 12px;
   }
 
   .message-user .message-bubble {
-    max-width: min(80vw, 420px);
+    max-width: 100%;
   }
 
   .notice {

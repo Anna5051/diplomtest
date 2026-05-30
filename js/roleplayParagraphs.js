@@ -128,9 +128,23 @@
     return narrationSignals.some((re) => re.test(clean));
   }
 
+  /** Прямая речь персонажа к игроку — не «мета-описание» действий пользователя. */
+  function isInCharacterDialogue(paragraph) {
+    const p = String(paragraph || "").trim();
+    if (!p) return false;
+    if (/^[—–-]\s+/u.test(p)) return true;
+    if (/«[^»]{2,}»/u.test(p)) return true;
+    if (/(?:его|её|ее|ей)\s+(?:голос|речь|шёпот|шепот)/iu.test(p)) return true;
+    if (/(?:голос|речь)\s+(?:прозвучал|звучал|стал|был)/iu.test(p)) return true;
+    return /(?:сказала|произнесла|прошептала|шепнула|спросила|ответила|проговорила|усмехнулась|вздохнула)/iu.test(
+      p,
+    );
+  }
+
   function isUserMetaParagraph(paragraph) {
     const p = String(paragraph || "").trim();
     if (!p || p.startsWith("*")) return false;
+    if (isInCharacterDialogue(p)) return false;
 
     const metaPatterns = [
       /^ты\s+(?:стоишь|сидишь|лежишь|идёшь|идешь|находишь|чувствуешь|думаешь|видишь|слышишь|можешь|должен|должна|замер|замерла)(?:\s|[,.!?]|$)/iu,

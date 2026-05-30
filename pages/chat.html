@@ -5,12 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Чат — Charitor.ai</title>
   <link rel="stylesheet" href="/css/general.css" />
-  <link rel="stylesheet" href="/css/chat.css?v=charitor-action-btn-no-square" />
+  <link rel="stylesheet" href="/css/chat.css?v=charitor-mobile-msg-center-3" />
   <script src="/js/runtime-config.js"></script>
   <script src="/js/api-base.js"></script>
   <script src="/js/notifications.js" defer></script>
   <script src="/js/imageLightbox.js" defer></script>
   <script src="/js/roleplayParagraphs.js?v=charitor-quotes-fix2"></script>
+  <script src="/js/mergeContinuation.js?v=charitor-continue-merge-2"></script>
+  <script src="/js/chatTokens.js"></script>
 </head>
 
 <body>
@@ -559,36 +561,431 @@
       return div.innerHTML;
     }
 
-    /** Рендер ответа бота: абзацы, *курсив* для действий и мыслей (как Janitor). */
+    function applyChatTokens(text) {
+      if (typeof substituteChatTokens !== "function") {
+        return String(text ?? "");
+      }
+      return substituteChatTokens(text, {
+        personaName: activePersona?.name || "",
+        username: savedUser?.username || "",
+        charName: currentBot?.name || "",
+      });
+    }
+
+    const BOT_STREAM_FOOTER_PLACEHOLDER = `<div class="message-bubble-footer message-bubble-footer--placeholder" aria-hidden="true"><div class="message-actions message-actions--footer message-actions--placeholder"><span class="message-footer-slot"></span><span class="message-footer-slot"></span><span class="message-footer-slot"></span><span class="message-footer-slot"></span></div></div>`;
+
+    /** Единый HTML-формат (br) — одинаковый при стриме и после завершения. */
     function formatBotMessageHtml(text) {
       const normalized = normalizeChatMessageText(text);
       if (!normalized) return "";
 
-      const structured =
-        typeof structureRoleplayParagraphs === "function"
-          ? structureRoleplayParagraphs(normalized)
-          : normalized;
+      let source = normalized;
+      if (typeof structureRoleplayParagraphs === "function") {
+        source = structureRoleplayParagraphs(normalized);
+      }
 
-      const withEmphasis = escapeHtml(structured).replace(
+      const withEmphasis = escapeHtml(source).replace(
         /\*([^*\n]+)\*/g,
         "<em>$1</em>",
       );
 
-      const blocks = withEmphasis.split(/\n{2,}/);
-      if (blocks.length <= 1) {
-        return withEmphasis.replace(/\n/g, "<br>");
+      const paragraphs = withEmphasis
+        .split(/\n{2,}/)
+        .map((block) => block.trim())
+        .filter(Boolean);
+
+      if (!paragraphs.length) return "";
+      if (paragraphs.length === 1) {
+        return paragraphs[0].replace(/\n/g, "<br>");
       }
 
-      return blocks
-        .map((block) => block.trim())
-        .filter(Boolean)
-        .map((block) => `<p>${block.replace(/\n/g, "<br>")}</p>`)
-        .join("");
+      return paragraphs.map((block) => block.replace(/\n/g, "<br>")).join("<br><br>");
+    }
+
+    function buildStreamingBubbleInnerHtml(text) {
+      const html = formatBotMessageHtml(text);
+      return html
+        ? `${html}<span class="stream-cursor" aria-hidden="true"></span>`
+        : '<span class="stream-cursor" aria-hidden="true"></span>';
+    }
+
+    function formatStreamPlainText(text) {
+      return applyChatTokens(normalizeChatMessageText(text));
+    }
+
+    function isMessagesBoxNearBottom(threshold = 96) {
+      return (
+        messagesBox.scrollHeight -
+          messagesBox.scrollTop -
+          messagesBox.clientHeight <
+        threshold
+      );
+    }
+
+    function ensureStreamBubbleShell(bubble) {
+      let body = bubble.querySelector(".stream-live");
+      if (!body) {
+        bubble.replaceChildren();
+        body = document.createElement("div");
+        body.className = "stream-live";
+        bubble.appendChild(body);
+      }
+      return body;
     }
 
     function setBotBubbleContent(bubble, text) {
       if (!bubble) return;
-      bubble.innerHTML = formatBotMessageHtml(text);
+      bubble.classList.remove("message-bubble--streaming", "loading");
+      const displayText = applyChatTokens(normalizeChatMessageText(text));
+      bubble.innerHTML = `<div class="stream-live">${formatBotMessageHtml(displayText)}</div>`;
+    }
+
+    function updateStreamingBubble(rowEl, text, { scroll = true } = {}) {
+      if (!rowEl) return;
+
+      const bubble = rowEl.querySelector(".message-bubble");
+      if (!bubble) return;
+      bubble.classList.remove("loading");
+      bubble.classList.add("message-bubble--streaming");
+
+      const displayText = formatStreamPlainText(text);
+      const body = ensureStreamBubbleShell(bubble);
+
+      let textNode = body.firstChild;
+      if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
+        body.replaceChildren();
+        textNode = document.createTextNode(displayText);
+        body.appendChild(textNode);
+      } else if (textNode.textContent !== displayText) {
+        textNode.textContent = displayText;
+      }
+
+      if (!body.querySelector(".stream-cursor")) {
+        const cursor = document.createElement("span");
+        cursor.className = "stream-cursor";
+        cursor.setAttribute("aria-hidden", "true");
+        body.appendChild(cursor);
+      }
+
+      if (scroll && isMessagesBoxNearBottom()) {
+        messagesBox.scrollTop = messagesBox.scrollHeight;
+      }
+    }
+
+    function prepareBotRowForStreaming(rowEl) {
+      if (!rowEl) return;
+      const isExistingMessage = Boolean(rowEl.dataset.messageId);
+
+      if (!isExistingMessage) {
+        rowEl.querySelector(".message-card-header-actions")?.replaceChildren();
+        const contentCol = rowEl.querySelector(".message-content-col--bot");
+        const footer = contentCol?.querySelector(".message-bubble-footer");
+        if (footer && !footer.classList.contains("message-bubble-footer--placeholder")) {
+          footer.remove();
+        }
+      }
+
+      const bubble = rowEl.querySelector(".message-bubble");
+      if (!bubble) return;
+      bubble.classList.remove("loading");
+      bubble.classList.add("message-bubble--streaming");
+      bubble.replaceChildren();
+      const body = document.createElement("div");
+      body.className = "stream-live";
+      const cursor = document.createElement("span");
+      cursor.className = "stream-cursor";
+      cursor.setAttribute("aria-hidden", "true");
+      body.appendChild(cursor);
+      bubble.appendChild(body);
+    }
+
+    function getStreamedBubblePlainText(bubble) {
+      const body = bubble?.querySelector(".stream-live");
+      if (!body) return "";
+      const first = body.firstChild;
+      if (first?.nodeType === Node.TEXT_NODE) {
+        return String(first.textContent || "");
+      }
+      return String(body.textContent || "").replace(/\u200b/g, "");
+    }
+
+    function capturePartialBotTextFromRow(rowEl) {
+      const bubble = rowEl?.querySelector(".message-bubble");
+      const plain = getStreamedBubblePlainText(bubble).trim();
+      return normalizeChatMessageText(plain);
+    }
+
+    function stopStreamingBotRow(rowEl, partialText) {
+      const bubble = rowEl?.querySelector(".message-bubble");
+      if (!bubble) return;
+      const text = String(partialText || "").trim();
+      if (text) {
+        setBotBubbleContent(bubble, text);
+      } else {
+        bubble.classList.remove("message-bubble--streaming", "loading");
+      }
+    }
+
+    async function persistPartialBotReply({ messageId, text }) {
+      const normalized = normalizeChatMessageText(text);
+      if (!normalized) return null;
+
+      const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/partial-bot`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          text: normalized,
+          ...(messageId ? { message_id: Number(messageId) } : {}),
+        }),
+      });
+      const data = await safeReadJson(response);
+      if (!response.ok) {
+        throw new Error(data.message || "Не удалось сохранить частичный ответ");
+      }
+      return data;
+    }
+
+    async function keepPartialBotReplyOnAbort({ error, streamRow, messageId }) {
+      const partial =
+        String(error?.partialStreamText || "").trim() ||
+        capturePartialBotTextFromRow(streamRow);
+      if (!partial) {
+        return null;
+      }
+
+      try {
+        const saved = await persistPartialBotReply({
+          messageId: messageId || undefined,
+          text: partial,
+        });
+        const reply = saved?.reply || {
+          id: messageId,
+          sender_type: "bot",
+          content: partial,
+        };
+        if (streamRow) {
+          if (reply?.id) {
+            finalizeStreamedBotRow(streamRow, reply);
+          } else {
+            stopStreamingBotRow(streamRow, partial);
+          }
+        }
+        return { partial, reply };
+      } catch {
+        if (streamRow) {
+          stopStreamingBotRow(streamRow, partial);
+        }
+        return {
+          partial,
+          reply: {
+            id: messageId,
+            sender_type: "bot",
+            content: partial,
+          },
+        };
+      }
+    }
+
+    function finalizeStreamedBotRow(rowEl, message) {
+      if (!rowEl || !message?.id) return;
+      rowEl.dataset.messageId = String(message.id);
+
+      const bubble = rowEl.querySelector(".message-bubble");
+      if (bubble && message?.content != null && String(message.content).trim()) {
+        const streamedText = getStreamedBubblePlainText(bubble).trim();
+        let content = message.content;
+        const finalText = formatStreamPlainText(content);
+        if (streamedText) {
+          const streamLen = streamedText.length;
+          const finalLen = finalText.trim().length;
+          const truncatedByServer =
+            streamLen > 160 &&
+            finalLen < streamLen * 0.68 &&
+            finalLen < streamLen - 80;
+          if (truncatedByServer) {
+            content = streamedText;
+            message = { ...message, content: streamedText };
+          }
+        }
+        if (formatStreamPlainText(content).trim() !== streamedText) {
+          setBotBubbleContent(bubble, content);
+        } else {
+          bubble.classList.remove("message-bubble--streaming", "loading");
+        }
+      } else if (bubble) {
+        bubble.classList.remove("message-bubble--streaming", "loading");
+      }
+
+      refreshBotMessageChrome(Number(message.id), message);
+    }
+
+    function refreshUserMessageChrome(rowEl, message) {
+      if (!rowEl || !message?.id) return;
+      rowEl.dataset.messageId = String(message.id);
+
+      const head = rowEl.querySelector(".message-user-head");
+      let headActions = rowEl.querySelector(
+        ".message-card-header-actions--head",
+      );
+      const moreHtml = buildMessageMoreMenu(message);
+      if (moreHtml) {
+        if (headActions) {
+          headActions.innerHTML = moreHtml;
+        } else if (head) {
+          head.insertAdjacentHTML(
+            "beforeend",
+            `<div class="message-card-header-actions message-card-header-actions--head">${moreHtml}</div>`,
+          );
+        }
+      }
+
+      const contentCol = rowEl.querySelector(".message-content-col--user");
+      const toolbarHtml = buildMessageUserToolbarHtml(message, false);
+      const oldToolbar = contentCol?.querySelector(".message-user-toolbar");
+      if (oldToolbar) {
+        if (toolbarHtml) oldToolbar.outerHTML = toolbarHtml;
+        else oldToolbar.remove();
+      } else if (toolbarHtml && contentCol) {
+        contentCol.insertAdjacentHTML("afterbegin", toolbarHtml);
+      }
+    }
+
+    async function readResponseBodyJson(response) {
+      const raw = await response.text();
+      if (!raw.trim()) return {};
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return { message: raw || "Ошибка сервера" };
+      }
+    }
+
+    function createBotStreamHandlers(streamRow, { baseText = "" } = {}) {
+      return {
+        baseText,
+        onStreamUpdate: (fullText) => {
+          updateStreamingBubble(streamRow, fullText);
+        },
+      };
+    }
+
+    async function postChatGeneration(url, payload, signal, streamHandlers = {}) {
+      validateLlmBeforeRequest();
+      let response;
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ ...payload, stream: true }),
+          signal,
+        });
+      } catch (fetchErr) {
+        if (fetchErr?.name === "AbortError") {
+          const abortError = new DOMException("The operation was aborted.", "AbortError");
+          abortError.partialStreamText = "";
+          throw abortError;
+        }
+        throw fetchErr;
+      }
+
+      const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+      const isNdjson = contentType.includes("ndjson");
+
+      if (!isNdjson) {
+        const data = await readResponseBodyJson(response);
+        if (!response.ok) {
+          throw new Error(data.message || "Ошибка генерации");
+        }
+        return data;
+      }
+
+      if (!response.ok) {
+        const data = await readResponseBodyJson(response);
+        throw new Error(data.message || "Ошибка генерации");
+      }
+
+      if (!response.body) {
+        throw new Error("Потоковый ответ недоступен");
+      }
+
+      let result = {};
+      const lockStreamBase = Boolean(String(streamHandlers.baseText || "").trim());
+      let streamBase = String(streamHandlers.baseText || "");
+      let streamAddition = "";
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const getDisplayAddition = () => {
+        if (!streamAddition) return "";
+        if (streamBase && typeof stripContinuationOverlap === "function") {
+          return stripContinuationOverlap(streamBase, streamAddition);
+        }
+        return streamAddition;
+      };
+
+      const emitStream = () => {
+        streamHandlers.onStreamUpdate?.(streamBase + getDisplayAddition());
+      };
+
+      const getStreamText = () => streamBase + getDisplayAddition();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          let lineBreak = buffer.indexOf("\n");
+          while (lineBreak >= 0) {
+            const line = buffer.slice(0, lineBreak).trim();
+            buffer = buffer.slice(lineBreak + 1);
+            lineBreak = buffer.indexOf("\n");
+            if (!line) continue;
+
+            const evt = JSON.parse(line);
+            if (evt.type === "user_message") {
+              result.user_message = evt.user_message;
+              streamHandlers.onUserMessage?.(evt.user_message);
+            } else if (evt.type === "base") {
+              if (!lockStreamBase) {
+                streamBase = String(evt.text || "");
+              }
+              emitStream();
+            } else if (evt.type === "chunk") {
+              streamAddition += String(evt.text || "");
+              emitStream();
+            } else if (evt.type === "done") {
+              result = { ...result, ...evt };
+            } else if (evt.type === "error") {
+              const err = new Error(evt.message || "Ошибка генерации");
+              if (evt.llm_error) err.llm_error = true;
+              if (evt.user_message) err.user_message = evt.user_message;
+              throw err;
+            }
+          }
+        }
+      } catch (streamErr) {
+        if (streamErr?.name === "AbortError") {
+          const abortError = new DOMException("The operation was aborted.", "AbortError");
+          abortError.partialStreamText = getStreamText();
+          if (result.user_message) {
+            abortError.user_message = result.user_message;
+          }
+          throw abortError;
+        }
+        throw streamErr;
+      }
+
+      if (!result.reply && !result.user_message) {
+        throw new Error("Пустой ответ сервера");
+      }
+      return result;
     }
 
     /** Убирает ведущие пробелы у каждой строки (trimStart + редкие символы, которые trim не трогает). */
@@ -628,9 +1025,16 @@
     function getDisplayedBotMessageContent(message) {
       if (!message) return "";
       const variants = getBotSwipeVariants(message);
-      if (!variants) return normalizeChatMessageText(message.content || "");
-      const i = clampSwipeVariantIndex(message._variantIndex, variants.length);
-      return normalizeChatMessageText(String(variants[i] ?? message.content ?? ""));
+      const raw = !variants
+        ? normalizeChatMessageText(message.content || "")
+        : normalizeChatMessageText(
+            String(
+              variants[clampSwipeVariantIndex(message._variantIndex, variants.length)] ??
+                message.content ??
+                "",
+            ),
+          );
+      return applyChatTokens(raw);
     }
 
     function isSwipeVariantCommittedToServer(message) {
@@ -1690,6 +2094,7 @@
         personaBtn.classList.remove("active");
       }
       syncChatInputPersona();
+      rerenderMessages();
     }
 
     function personaStubFromNumericId(rawId) {
@@ -1860,46 +2265,29 @@
       return messagesBox.querySelector(`.message[data-message-id="${messageId}"]`);
     }
 
-    /** Смена текста в том же пузырьке: уходит влево, новый текст заезжает справа (не новое сообщение в треде). */
-    async function animateBubbleSwipeReplace(bubble, newText) {
-      bubble.classList.remove("loading");
-      bubble.style.willChange = "transform, opacity";
-      bubble.style.transition = "transform 0.2s ease, opacity 0.2s ease";
-      bubble.style.transform = "translateX(-12%)";
-      bubble.style.opacity = "0";
-      await new Promise((resolve) => setTimeout(resolve, 220));
-      setBotBubbleContent(bubble, newText);
-      bubble.style.transition = "none";
-      bubble.style.transform = "translateX(14%)";
-      bubble.style.opacity = "0";
-      void bubble.offsetHeight;
-      bubble.style.transition = "transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.28s ease";
-      bubble.style.transform = "translateX(0)";
-      bubble.style.opacity = "1";
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      bubble.style.transition = "";
-      bubble.style.transform = "";
-      bubble.style.opacity = "";
-      bubble.style.willChange = "";
-    }
-
     async function runBotMessageRegenerate(messageId, { swipe } = { swipe: false }) {
       const idx = messageRows.findIndex((item) => Number(item.id) === messageId);
       if (idx === -1) return;
 
       await commitPendingSwipeVariantsBeforeSend();
 
+      const streamRow = findMessageRow(messageId);
       messageRows[idx] = {
         ...messageRows[idx],
-        _loading: true,
+        _streaming: true,
       };
-      rerenderMessages();
+      prepareBotRowForStreaming(streamRow);
+      setBotMessageFooterBusy(messageId, true);
 
       const signal = startAiBusy();
 
       try {
-        const data = await regenerateMessageOnServer(messageId, signal, { swipe });
+        const data = await regenerateMessageOnServer(messageId, signal, {
+          swipe,
+          streamRow,
+        });
         let merged = { ...messageRows[idx], ...data.reply };
+        delete merged._streaming;
         delete merged._loading;
         if (!swipe) {
           delete merged._contentVariants;
@@ -1907,40 +2295,40 @@
         }
         messageRows[idx] = merged;
 
-        if (swipe) {
-          const row = findMessageRow(messageId);
-          const bubble = row?.querySelector(".message-bubble");
-          const stack = row?.querySelector(".message-stack");
-          if (bubble && stack) {
-            await animateBubbleSwipeReplace(bubble, merged.content);
-            const hdr = row.querySelector(".message-card-header-actions");
-            if (hdr) hdr.innerHTML = buildMessageHeaderAreaHtml(merged);
-            const contentCol =
-              stack.closest(".message-content-col") || stack.parentElement;
-            contentCol?.querySelector(".message-bubble-footer")?.remove();
-            stack.insertAdjacentHTML(
-              "afterend",
-              `<div class="message-bubble-footer">${buildMessageFooterActions(merged)}</div>`,
-            );
-          } else {
-            rerenderMessages();
-          }
-        } else {
-          rerenderMessages();
-        }
+        finalizeStreamedBotRow(streamRow, merged);
 
         showToast(swipe ? "Новый вариант ответа" : "Новый ответ готов");
       } catch (error) {
+        delete messageRows[idx]._streaming;
+        delete messageRows[idx]._loading;
         if (error.name === "AbortError") {
-          delete messageRows[idx]._loading;
+          const kept = await keepPartialBotReplyOnAbort({
+            error,
+            streamRow,
+            messageId,
+          });
+          if (kept?.reply) {
+            messageRows[idx] = {
+              ...messageRows[idx],
+              ...kept.reply,
+              content: kept.partial,
+            };
+            delete messageRows[idx]._contentVariants;
+            delete messageRows[idx]._variantIndex;
+            if (kept.reply.id) {
+              refreshBotMessageChrome(Number(kept.reply.id), messageRows[idx]);
+            }
+            showToast("Генерация остановлена");
+            return;
+          }
           rerenderMessages();
           showToast("Перегенерация остановлена");
           return;
         }
-        delete messageRows[idx]._loading;
         rerenderMessages();
         throw error;
       } finally {
+        setBotMessageFooterBusy(messageId, false);
         stopAiBusy();
       }
     }
@@ -1959,15 +2347,32 @@
       const row = findMessageRow(messageId);
       if (!row) return;
       const hdr = row.querySelector(".message-card-header-actions");
-      if (hdr) hdr.innerHTML = buildMessageHeaderAreaHtml(message);
+      const headerHtml = buildMessageHeaderAreaHtml(message);
+      if (hdr && hdr.innerHTML !== headerHtml) {
+        hdr.innerHTML = headerHtml;
+      }
+
       const contentCol = row.querySelector(".message-content-col--bot");
-      contentCol?.querySelector(".message-bubble-footer")?.remove();
+      if (!contentCol) return;
+
       const footerHtml = buildMessageFooterActions(message);
-      if (footerHtml && contentCol) {
-        contentCol.insertAdjacentHTML(
-          "beforeend",
-          `<div class="message-bubble-footer">${footerHtml}</div>`,
-        );
+      let footer = contentCol.querySelector(".message-bubble-footer");
+
+      if (footerHtml) {
+        if (footer) {
+          if (footer.innerHTML !== footerHtml) {
+            footer.innerHTML = footerHtml;
+          }
+          footer.classList.remove("message-bubble-footer--placeholder");
+          footer.removeAttribute("aria-hidden");
+        } else {
+          contentCol.insertAdjacentHTML(
+            "beforeend",
+            `<div class="message-bubble-footer">${footerHtml}</div>`,
+          );
+        }
+      } else if (footer) {
+        footer.remove();
       }
     }
 
@@ -1982,32 +2387,61 @@
       const bubble = row?.querySelector(".message-bubble");
       if (!bubble) return;
 
+      const baseText = getDisplayedBotMessageContent(messageRows[idx]);
       messageRows[idx] = { ...messageRows[idx], _continuing: true };
       setBotMessageFooterBusy(messageId, true);
+      prepareBotRowForStreaming(row);
+      updateStreamingBubble(row, baseText, { scroll: false });
 
       const signal = startAiBusy();
 
       try {
-        const data = await continueMessageOnServer(messageId, signal);
+        const data = await continueMessageOnServer(messageId, signal, {
+          streamRow: row,
+          baseText,
+        });
         const merged = { ...messageRows[idx], ...data.reply };
         delete merged._continuing;
         delete merged._contentVariants;
         delete merged._variantIndex;
         messageRows[idx] = merged;
 
-        setBotBubbleContent(bubble, merged.content);
-        refreshBotMessageChrome(messageId, merged);
-        messagesBox.scrollTop = messagesBox.scrollHeight;
+        finalizeStreamedBotRow(row, merged);
+        if (isMessagesBoxNearBottom()) {
+          messagesBox.scrollTop = messagesBox.scrollHeight;
+        }
         showToast("Ответ продолжен");
       } catch (error) {
-        delete messageRows[idx]._continuing;
-        setBotMessageFooterBusy(messageId, false);
         if (error.name === "AbortError") {
+          const kept = await keepPartialBotReplyOnAbort({
+            error,
+            streamRow: row,
+            messageId,
+          });
+          if (kept?.reply) {
+            messageRows[idx] = {
+              ...messageRows[idx],
+              ...kept.reply,
+              content: kept.partial,
+            };
+            delete messageRows[idx]._continuing;
+            delete messageRows[idx]._contentVariants;
+            delete messageRows[idx]._variantIndex;
+            if (kept.reply.id) {
+              refreshBotMessageChrome(Number(kept.reply.id), messageRows[idx]);
+            }
+            showToast("Продолжение остановлено");
+            return;
+          }
+          bubble.classList.remove("message-bubble--streaming");
           showToast("Продолжение остановлено");
           return;
         }
+        bubble.classList.remove("message-bubble--streaming");
         throw error;
       } finally {
+        delete messageRows[idx]?._continuing;
+        setBotMessageFooterBusy(messageId, false);
         stopAiBusy();
       }
     }
@@ -2229,8 +2663,14 @@
       `;
     }
 
-    function buildMessageHeaderAreaHtml(message) {
-      return `${buildMessageHeaderActions(message)}${buildMessageMoreMenu(message)}`;
+    function buildMessageHeaderAreaHtml(message, { reserveChrome = false } = {}) {
+      const actions = buildMessageHeaderActions(message);
+      const menu = buildMessageMoreMenu(message);
+      if (actions || menu) return `${actions}${menu}`;
+      if (reserveChrome) {
+        return `<span class="message-header-chrome-placeholder" aria-hidden="true"></span>`;
+      }
+      return "";
     }
 
     function buildMessageUserDeleteBtn(message) {
@@ -2247,7 +2687,10 @@
     }
 
     function buildMessageUserToolbarHtml(message, isLoadingUi) {
-      if (isLoadingUi || !message?.id) return "";
+      if (isLoadingUi) return "";
+      if (!message?.id) {
+        return `<div class="message-user-toolbar message-user-toolbar--placeholder message-actions--toolbar" aria-hidden="true"><span class="message-toolbar-slot"></span><span class="message-toolbar-slot"></span></div>`;
+      }
       const headerActions = buildMessageHeaderActions(message);
       const deleteBtn = buildMessageUserDeleteBtn(message);
       if (!headerActions && !deleteBtn) return "";
@@ -2498,7 +2941,8 @@
 
     function renderMessage(message, options = {}) {
       const type = message.sender_type === "user" ? "user" : "bot";
-      const isLoadingUi = Boolean(options.loading || message._loading);
+      const isStreamingUi = Boolean(options.streaming || message._streaming);
+      const isLoadingUi = Boolean(options.loading || message._loading) && !isStreamingUi;
       const isFilterNotice = type === "bot" && isPolicyFilteredBotMessage(message);
       const isUserPolicyFlagged =
         type === "user" && Number(message.policy_violation) === 1;
@@ -2531,15 +2975,23 @@
       const footerHtml =
         message.id && footerActionsHtml
           ? `<div class="message-bubble-footer">${footerActionsHtml}</div>`
-          : "";
+          : isStreamingUi
+            ? BOT_STREAM_FOOTER_PLACEHOLDER
+            : "";
 
-      const headerHtml = !isLoadingUi ? buildMessageHeaderAreaHtml(message) : "";
+      const headerHtml = !isLoadingUi
+        ? buildMessageHeaderAreaHtml(message, {
+            reserveChrome: isStreamingUi && type === "bot" && !message.id,
+          })
+        : "";
       const bubbleInner = isLoadingUi
         ? buildTypingDotsHtml()
-        : type === "bot"
-          ? formatBotMessageHtml(bubbleText)
-          : escapeHtml(bubbleText);
-      const bubbleClass = `message-bubble ${isLoadingUi ? "loading" : ""}${decryptUnavailable ? " message-bubble--unavailable" : ""}`;
+        : isStreamingUi && !bubbleText
+          ? '<div class="stream-live"><span class="stream-cursor" aria-hidden="true"></span></div>'
+          : type === "bot"
+            ? `<div class="stream-live">${formatBotMessageHtml(bubbleText)}</div>`
+            : escapeHtml(bubbleText);
+      const bubbleClass = `message-bubble ${isLoadingUi ? "loading" : ""}${isStreamingUi ? " message-bubble--streaming" : ""}${decryptUnavailable ? " message-bubble--unavailable" : ""}`;
       const bubbleAttrs =
         type === "bot" && isFilterNotice ? ' role="status" aria-live="polite"' : "";
 
@@ -2550,6 +3002,7 @@
           <div class="message-user-block">
             <div class="message-user-column">
               <div class="message-user-head">
+                <img class="message-avatar message-avatar--user-header message-avatar--mobile-only avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
                 <span class="message-author">${escapeHtml(name)}</span>
                 ${
                   userMoreHtml
@@ -2565,16 +3018,17 @@
                     ${isUserPolicyFlagged && !isLoadingUi ? `<p class="message-policy-hint" role="note">Реплика не проходит правила площадки (жестокость, 18+ или мат). Для модели в истории она учитывается как скрытая; ответ персонажа ограничен.</p>` : ""}
                   </div>
                 </div>
-                <img class="message-avatar message-avatar--user-side avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
+                <img class="message-avatar message-avatar--user-side message-avatar--desktop-only avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
               </div>
             </div>
           </div>
         `;
       } else {
         row.innerHTML = `
-          <img class="message-avatar avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
+          <img class="message-avatar message-avatar--side message-avatar--desktop-only avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
           <div class="message-bot-block">
             <div class="message-bot-meta message-top-row">
+              <img class="message-avatar message-avatar--bot-header message-avatar--mobile-only avatar-zoomable" src="${escapeHtml(avatar)}" alt="" />
               <span class="message-author">${escapeHtml(name)}</span>
               <div class="message-card-header-actions">${headerHtml}</div>
             </div>
@@ -2693,8 +3147,7 @@
       }
     }
 
-    async function sendMessageToServer(text, signal) {
-      validateLlmBeforeRequest();
+    async function sendMessageToServer(text, signal, streamRow) {
       const payload = {
         text,
         persona_id: activePersona?.id || null,
@@ -2707,22 +3160,12 @@
         ...buildLlmRequestExtras(),
       };
 
-      const response = await fetch(`${API_BASE}/chat/${currentChatId}/message`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(payload),
+      return postChatGeneration(
+        `${API_BASE}/chat/${currentChatId}/message`,
+        payload,
         signal,
-      });
-
-      const data = await safeReadJson(response);
-
-      if (!response.ok) {
-        throw new Error(data.message || "Ошибка отправки сообщения");
-      }
-
-      return data;
+        createBotStreamHandlers(streamRow),
+      );
     }
 
     async function updateMessageOnServer(messageId, text, swipePersist = null) {
@@ -2797,30 +3240,19 @@
       }
     }
 
-    async function generateReplyAfterUserMessageOnServer(userMessageId, signal) {
-      validateLlmBeforeRequest();
-      const response = await fetch(
+    async function generateReplyAfterUserMessageOnServer(userMessageId, signal, streamRow) {
+      return postChatGeneration(
         `${API_BASE}/chat/${currentChatId}/message/${userMessageId}/generate-reply`,
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            user_id: userId,
-            persona_prompt: activePersona?.persona_prompt || activePersona?.description || "",
-            persona_name: activePersona?.name || "",
-            proxy: buildProxyPayloadForRequest(),
-            ...buildLlmRequestExtras(),
-          }),
-          signal,
+          user_id: userId,
+          persona_prompt: activePersona?.persona_prompt || activePersona?.description || "",
+          persona_name: activePersona?.name || "",
+          proxy: buildProxyPayloadForRequest(),
+          ...buildLlmRequestExtras(),
         },
+        signal,
+        createBotStreamHandlers(streamRow),
       );
-      const data = await safeReadJson(response);
-      if (!response.ok) {
-        throw new Error(data.message || "Не удалось получить ответ бота");
-      }
-      return data;
     }
 
     async function runGenerateBotReplyForUser(userMessageId) {
@@ -2847,25 +3279,51 @@
       const loadingPlaceholder = {
         sender_type: "bot",
         content: "",
-        _loading: true,
+        _streaming: true,
       };
       messageRows.splice(idx + 1, 0, loadingPlaceholder);
       rerenderMessages();
+      const streamRow = messagesBox.querySelectorAll(".message")[idx + 1];
 
       const signal = startAiBusy();
       try {
-        const data = await generateReplyAfterUserMessageOnServer(userMessageId, signal);
+        const data = await generateReplyAfterUserMessageOnServer(
+          userMessageId,
+          signal,
+          streamRow,
+        );
         messageRows.splice(idx + 1, 1);
         if (data.reply) {
           messageRows.splice(idx + 1, 0, data.reply);
+          const finalRow = messagesBox.querySelectorAll(".message")[idx + 1];
+          finalizeStreamedBotRow(finalRow, data.reply);
         }
-        rerenderMessages();
         showToast("Ответ бота готов");
       } catch (error) {
+        if (error.name === "AbortError") {
+          const kept = await keepPartialBotReplyOnAbort({
+            error,
+            streamRow,
+          });
+          messageRows.splice(idx + 1, 1);
+          if (kept?.reply) {
+            messageRows.splice(idx + 1, 0, kept.reply);
+            if (!kept.reply.id) {
+              messageRows[idx + 1].content = kept.partial;
+            }
+            showToast("Генерация остановлена");
+            return;
+          }
+          rerenderMessages();
+          showToast("Генерация остановлена");
+          return;
+        }
         messageRows.splice(idx + 1, 1);
         rerenderMessages();
-        if (error.name === "AbortError") {
-          showToast("Генерация остановлена");
+        if (error.user_message) {
+          messageRows[idx] = { ...messageRows[idx], ...error.user_message };
+          rerenderMessages();
+          showToast(error.message || "Не удалось получить ответ бота");
         } else {
           showToast(error.message || "Не удалось получить ответ бота");
         }
@@ -2874,47 +3332,37 @@
       }
     }
 
-    async function continueMessageOnServer(messageId, signal) {
-      validateLlmBeforeRequest();
-      const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/${messageId}/continue`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+    async function continueMessageOnServer(messageId, signal, { streamRow, baseText } = {}) {
+      const continueFrom = normalizeChatMessageText(String(baseText || "").trim());
+      return postChatGeneration(
+        `${API_BASE}/chat/${currentChatId}/message/${messageId}/continue`,
+        {
           user_id: userId,
           persona_prompt: activePersona?.persona_prompt || activePersona?.description || "",
           persona_name: activePersona?.name || "",
           proxy: buildProxyPayloadForRequest(),
           ...buildLlmRequestExtras(),
-        }),
+          ...(continueFrom ? { continue_from: continueFrom } : {}),
+        },
         signal,
-      });
-      const data = await safeReadJson(response);
-      if (!response.ok) throw new Error(data.message || "Ошибка продолжения");
-      return data;
+        createBotStreamHandlers(streamRow, { baseText: continueFrom || "" }),
+      );
     }
 
-    async function regenerateMessageOnServer(messageId, signal, { swipe = false } = {}) {
-      validateLlmBeforeRequest();
-      const response = await fetch(`${API_BASE}/chat/${currentChatId}/message/${messageId}/regenerate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+    async function regenerateMessageOnServer(messageId, signal, { swipe = false, streamRow } = {}) {
+      return postChatGeneration(
+        `${API_BASE}/chat/${currentChatId}/message/${messageId}/regenerate`,
+        {
           user_id: userId,
           swipe: Boolean(swipe),
           persona_prompt: activePersona?.persona_prompt || activePersona?.description || "",
           persona_name: activePersona?.name || "",
           proxy: buildProxyPayloadForRequest(),
           ...buildLlmRequestExtras(),
-        }),
+        },
         signal,
-      });
-      const data = await safeReadJson(response);
-      if (!response.ok) throw new Error(data.message || "Ошибка перегенерации");
-      return data;
+        createBotStreamHandlers(streamRow),
+      );
     }
 
     async function refreshChatMessagesFromServer() {
@@ -2961,15 +3409,17 @@
         content: text,
       };
       renderMessage(optimisticUser);
+      const optimisticUserRow = messagesBox.querySelector(".message-user:last-child");
       chatInput.value = "";
 
       const loadingMessage = renderMessage(
         {
           sender_type: "bot",
           content: "",
+          _streaming: true,
         },
         {
-          loading: true,
+          streaming: true,
         },
       );
 
@@ -2977,19 +3427,22 @@
 
       try {
         await commitPendingSwipeVariantsBeforeSend();
-        const data = await sendMessageToServer(text, signal);
-
-        loadingMessage.remove();
-        const optimisticUserRow = messagesBox.lastElementChild;
-        if (optimisticUserRow) optimisticUserRow.remove();
+        const data = await sendMessageToServer(text, signal, loadingMessage);
 
         if (data.user_message?.id) {
           messageRows.push(data.user_message);
+        } else {
+          messageRows.push({ sender_type: "user", content: text });
         }
         if (data.reply?.id) {
           messageRows.push(data.reply);
+          finalizeStreamedBotRow(loadingMessage, data.reply);
         }
-        rerenderMessages();
+        if (data.user_message?.id) {
+          requestAnimationFrame(() => {
+            refreshUserMessageChrome(optimisticUserRow, data.user_message);
+          });
+        }
         if (data.content_filtered || Number(data.user_message?.policy_violation) === 1) {
           const base = (data.message || "Контент отфильтрован по правилам площадки.").trim();
           showToast(base + policyFilterReasonSuffix(data.filter_reason));
@@ -3001,9 +3454,68 @@
           });
         }
       } catch (error) {
-        loadingMessage.remove();
         if (error.name === "AbortError") {
+          const kept = await keepPartialBotReplyOnAbort({
+            error,
+            streamRow: loadingMessage,
+          });
+          if (kept?.reply) {
+            if (error.user_message?.id) {
+              const userIdx = messageRows.findIndex(
+                (m) =>
+                  m.sender_type === "user" &&
+                  String(m.content || "").trim() === text,
+              );
+              if (userIdx >= 0) {
+                messageRows[userIdx] = {
+                  ...messageRows[userIdx],
+                  ...error.user_message,
+                };
+              } else {
+                messageRows.push(error.user_message);
+              }
+              requestAnimationFrame(() => {
+                refreshUserMessageChrome(optimisticUserRow, error.user_message);
+              });
+            } else {
+              const exists = messageRows.some(
+                (m) =>
+                  m.sender_type === "user" &&
+                  String(m.content || "").trim() === text,
+              );
+              if (!exists) {
+                messageRows.push({ sender_type: "user", content: text });
+              }
+            }
+            messageRows.push(kept.reply);
+            if (!kept.reply.id) {
+              messageRows[messageRows.length - 1].content = kept.partial;
+            }
+            showToast("Генерация остановлена");
+            return;
+          }
+          loadingMessage.remove();
           showToast("Генерация остановлена");
+          try {
+            await refreshChatMessagesFromServer();
+          } catch {
+            const exists = messageRows.some(
+              (m) =>
+                m.sender_type === "user" &&
+                String(m.content || "").trim() === text,
+            );
+            if (!exists) {
+              messageRows.push({ sender_type: "user", content: text });
+              rerenderMessages();
+            }
+          }
+          return;
+        }
+        loadingMessage.remove();
+        if (error.user_message) {
+          messageRows.push(error.user_message);
+          rerenderMessages();
+          showToast(error.message || "Ошибка отправки сообщения");
         } else {
           showToast(error.message || "Ошибка отправки сообщения");
         }

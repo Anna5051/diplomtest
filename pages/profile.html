@@ -111,7 +111,7 @@
           <section class="profile-editor-panel hidden" id="profileEditorPanel">
             <div class="editor-panel-header">
               <h2>Редактор профиля</h2>
-              <p>Измените текст профиля и сохраните локально.</p>
+              <p>Измените текст профиля и сохраните — данные хранятся в базе.</p>
             </div>
 
             <div class="editor-toolbar">
@@ -235,6 +235,7 @@
 
       const bioStorageKey = `profileBioHtml_${savedUser.id}`;
       const avatarStorageKey = `profileAvatar_${savedUser.id}`;
+      let lastSavedProfileBio = "";
       const profileParams = new URLSearchParams(window.location.search);
       const externalAuthorId = profileParams.get("authorId");
       const externalUsername = (profileParams.get("username") || "").trim();
@@ -549,6 +550,38 @@
         );
       }
 
+      function applyProfileBioHtml(html) {
+        const safeHtml = String(html || "").trim();
+        lastSavedProfileBio = safeHtml;
+        profileEditor.innerHTML = safeHtml || "Описание пока не заполнено";
+        profilePreview.innerHTML = safeHtml || "Описание пока не заполнено";
+      }
+
+      async function fetchUserProfile(userId) {
+        const response = await fetch(`${API_BASE}/user/${userId}/profile`);
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.message || "Ошибка загрузки профиля");
+        }
+        return data;
+      }
+
+      async function saveProfileBioToServer(html) {
+        const response = await fetch(`${API_BASE}/user/profile-bio`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            user_id: savedUser.id,
+            profile_bio: html,
+          }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.message || "Ошибка сохранения профиля");
+        }
+        return data;
+      }
+
       function applyProfileBaseData(profile) {
         usernameElement.textContent = profile.username || "unknown";
 
@@ -765,22 +798,23 @@
         document.execCommand("insertHTML", false, `<code>${selection}</code>`);
       });
 
-      saveProfileBtn.addEventListener("click", () => {
+      saveProfileBtn.addEventListener("click", async () => {
         if (isExternalProfile) return;
         const html = profileEditor.innerHTML.trim();
 
-        localStorage.setItem(bioStorageKey, html);
-        profilePreview.innerHTML = html || "Описание пока не заполнено";
-
-        notifyUser("Профиль сохранён", "success");
+        try {
+          await saveProfileBioToServer(html);
+          applyProfileBioHtml(html);
+          localStorage.removeItem(bioStorageKey);
+          notifyUser("Профиль сохранён", "success");
+        } catch (error) {
+          notifyUser(error.message || "Ошибка сохранения профиля", "error");
+        }
       });
 
       cancelProfileBtn.addEventListener("click", () => {
         if (isExternalProfile) return;
-        const currentHtml =
-          localStorage.getItem(bioStorageKey) || "Hi, I'm Hanna.";
-        profileEditor.innerHTML = currentHtml;
-        profilePreview.innerHTML = currentHtml || "Описание пока не заполнено";
+        applyProfileBioHtml(lastSavedProfileBio);
         profileEditorPanel.classList.add("hidden");
         syncEditToggleButtonState();
       });
@@ -988,33 +1022,71 @@
       }
 
       async function loadProfileData() {
-        applyProfileBaseData(savedUser);
-
-        const ownBioHtml = localStorage.getItem(bioStorageKey);
-        profileEditor.innerHTML = ownBioHtml || "Hi, I'm Hanna.";
-        profilePreview.innerHTML = ownBioHtml || "Описание пока не заполнено";
-
-        if (savedAvatar && savedAvatar.trim()) {
-          setProfileAvatarImage(savedAvatar);
-        } else if (userAvatar && userAvatar.trim()) {
-          setProfileAvatarImage(userAvatar);
-        } else {
-          setProfileAvatarImage("/img/icon.svg");
-        }
-
         if (!isExternalProfile) {
-          viewedProfile = {
-            id: savedUser.id,
-            username: savedUser.username || "unknown",
-            created_at: savedUser.created_at || null,
-            avatar_url: userAvatar,
-          };
-          updateFollowButtonVisibility(viewedProfile);
-          updateFollowersCount(viewedProfile);
+          try {
+            const profileData = await fetchUserProfile(savedUser.id);
+            applyProfileBaseData(profileData);
+            let bioHtml = String(profileData.profile_bio || "").trim();
+            const legacyBio = localStorage.getItem(bioStorageKey);
+            if (!bioHtml && legacyBio && legacyBio.trim()) {
+              bioHtml = legacyBio.trim();
+              try {
+                await saveProfileBioToServer(bioHtml);
+                localStorage.removeItem(bioStorageKey);
+              } catch {
+                /* оставляем legacy в localStorage до следующей попытки */
+              }
+            }
+            applyProfileBioHtml(bioHtml);
+
+            if (savedAvatar && savedAvatar.trim()) {
+              setProfileAvatarImage(savedAvatar);
+            } else if (profileData.avatar_url && profileData.avatar_url.trim()) {
+              setProfileAvatarImage(profileData.avatar_url);
+            } else if (userAvatar && userAvatar.trim()) {
+              setProfileAvatarImage(userAvatar);
+            } else {
+              setProfileAvatarImage("/img/icon.svg");
+            }
+
+            viewedProfile = {
+              id: profileData.id,
+              username: profileData.username || "unknown",
+              created_at: profileData.created_at || null,
+              avatar_url: profileData.avatar_url || userAvatar,
+            };
+            updateFollowButtonVisibility(viewedProfile);
+            updateFollowersCount(viewedProfile);
+          } catch (error) {
+            notifyUser(error.message || "Ошибка загрузки профиля", "error");
+            applyProfileBaseData(savedUser);
+            applyProfileBioHtml(localStorage.getItem(bioStorageKey));
+            setProfileAvatarImage(userAvatar || "/img/icon.svg");
+          }
           return;
         }
 
         try {
+          if (externalAuthorId) {
+            const profileData = await fetchUserProfile(externalAuthorId);
+            viewedProfile = {
+              id: profileData.id,
+              username: profileData.username || externalUsername || "unknown",
+              created_at: profileData.created_at || null,
+              avatar_url: profileData.avatar_url || "",
+            };
+            applyProfileBaseData(viewedProfile);
+            const bioHtml = String(profileData.profile_bio || "").trim();
+            applyProfileBioHtml(bioHtml || `Профиль автора @${viewedProfile.username}`);
+            setProfileAvatarImage(
+              viewedProfile.avatar_url || "/img/icon.svg",
+            );
+            updateFollowButtonVisibility(viewedProfile);
+            updateFollowersCount(viewedProfile);
+            updateFollowButton(viewedProfile);
+            return;
+          }
+
           const response = await fetch(`${API_BASE}/all-bots`);
 
           if (!response.ok) {
